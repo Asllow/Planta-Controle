@@ -6,6 +6,10 @@
 #include "esp_log.h"
 #include "esp_event.h"
 #include "nvs_flash.h"
+#include "string.h" // Adicionado para a função strncpy
+
+// Adicionamos uma definição local para o número de tentativas
+#define WIFI_MAXIMUM_RETRY 5
 
 static const char *TAG = "WIFI_MANAGER";
 
@@ -22,7 +26,8 @@ static void event_handler(void* arg, esp_event_base_t event_base,
     if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START) {
         esp_wifi_connect();
     } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
-        if (s_retry_num < CONFIG_ESP_MAXIMUM_RETRY) {
+        // CORREÇÃO AQUI: Usamos nossa definição local WIFI_MAXIMUM_RETRY
+        if (s_retry_num < WIFI_MAXIMUM_RETRY) {
             esp_wifi_connect();
             s_retry_num++;
             ESP_LOGI(TAG, "Tentando reconectar ao AP");
@@ -38,10 +43,6 @@ static void event_handler(void* arg, esp_event_base_t event_base,
     }
 }
 
-/**
- * @brief Inicializa o NVS, o stack de rede, e conecta ao Wi-Fi.
- * * Esta função bloqueia a execução até que a conexão seja estabelecida ou falhe.
- */
 void wifi_init_sta(const char* ssid, const char* password) {
     // Inicializa o NVS (Non-Volatile Storage), necessário para o Wi-Fi
     esp_err_t ret = nvs_flash_init();
@@ -66,32 +67,29 @@ void wifi_init_sta(const char* ssid, const char* password) {
     ESP_ERROR_CHECK(esp_event_handler_instance_register(WIFI_EVENT, ESP_EVENT_ANY_ID, &event_handler, NULL, &instance_any_id));
     ESP_ERROR_CHECK(esp_event_handler_instance_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &event_handler, NULL, &instance_got_ip));
 
-    // Configura o Wi-Fi com os dados do menuconfig
     wifi_config_t wifi_config = {
-        .sta = {
-        },
+        .sta = { /* .ssid e .password são preenchidos dinamicamente */ },
     };
-
     strncpy((char*)wifi_config.sta.ssid, ssid, sizeof(wifi_config.sta.ssid));
     strncpy((char*)wifi_config.sta.password, password, sizeof(wifi_config.sta.password));
-
+    
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA) );
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config) );
     ESP_ERROR_CHECK(esp_wifi_start() );
 
     ESP_LOGI(TAG, "wifi_init_sta finalizado. Aguardando conexão...");
 
-    // Aguarda o bit de conexão ou de falha ser setado
     EventBits_t bits = xEventGroupWaitBits(s_wifi_event_group,
             WIFI_CONNECTED_BIT | WIFI_FAIL_BIT,
             pdFALSE,
             pdFALSE,
             portMAX_DELAY);
 
+    // CORREÇÃO AQUI: Usamos a variável 'ssid' que foi passada para a função
     if (bits & WIFI_CONNECTED_BIT) {
-        ESP_LOGI(TAG, "Conectado ao AP SSID:%s", CONFIG_ESP_WIFI_SSID);
+        ESP_LOGI(TAG, "Conectado ao AP SSID: %s", ssid);
     } else if (bits & WIFI_FAIL_BIT) {
-        ESP_LOGE(TAG, "Falha ao conectar ao SSID:%s", CONFIG_ESP_WIFI_SSID);
+        ESP_LOGE(TAG, "Falha ao conectar ao SSID: %s", ssid);
     } else {
         ESP_LOGE(TAG, "EVENTO INESPERADO");
     }

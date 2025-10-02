@@ -14,7 +14,10 @@
 
 QueueHandle_t data_queue;
 SemaphoreHandle_t g_setpoint_mutex;
-volatile float g_current_setpoint = 75.0f; // Setpoint inicial
+volatile float g_current_setpoint = 0.0f; // Começa com 0 para segurança
+
+// Definição da variável de calibração, com um valor inicial padrão/de bancada
+volatile float g_sensor_max_voltage_mv = 3100.0f;
 
 #define WIFI_SSID       "TITANIC"
 #define WIFI_PASSWORD   "$NovaPescaLivre332@;"

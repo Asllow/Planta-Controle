@@ -6,6 +6,7 @@
 #include "esp_http_client.h"
 #include "cJSON.h"
 #include "shared_resources.h"
+#include <inttypes.h>
 
 static const char *TAG = "HTTP_CLIENT_TASK";
 
@@ -39,7 +40,7 @@ void communication_task(void *pvParameter) {
             
             // 1. Monta o pacote JSON para enviar ao servidor
             snprintf(json_payload, sizeof(json_payload), 
-                    "{\"timestamp_amostra_ms\": %lld, \"valor_adc\": %d, \"tensao_mv\": %u, \"sinal_controle\": %.2f}",
+                    "{\"timestamp_amostra_ms\": %lld, \"valor_adc\": %d, \"tensao_mv\": %" PRIu32 ", \"sinal_controle\": %.2f}",
                     received_data.timestamp_amostra_ms,
                     received_data.valor_adc_raw,
                     received_data.tensao_mv,

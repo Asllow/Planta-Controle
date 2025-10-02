@@ -42,4 +42,9 @@ extern SemaphoreHandle_t g_setpoint_mutex;
  */
 extern volatile float g_current_setpoint;
 
+/**
+ * @brief Constante de Calibração.
+ */ 
+extern volatile float g_sensor_max_voltage_mv;
+
 #endif // SHARED_RESOURCES_H
