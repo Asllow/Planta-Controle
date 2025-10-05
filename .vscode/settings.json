@@ -16,5 +16,6 @@
     "--query-driver=C:\\Users\\arthu\\.espressif\\tools\\xtensa-esp-elf\\esp-14.2.0_20241119\\xtensa-esp-elf\\bin\\xtensa-esp32s3-elf-gcc.exe",
     "--compile-commands-dir=c:\\Users\\arthu\\Desktop\\Arthur Miranda\\ESP-IDF\\Planta Controle\\build"
   ],
-  "idf.flashType": "UART"
+  "idf.flashType": "UART",
+  "idf.monitorPort": "COM5"
 }
