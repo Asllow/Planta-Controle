@@ -43,7 +43,14 @@ extern SemaphoreHandle_t g_setpoint_mutex;
 extern volatile float g_current_setpoint;
 
 /**
+ * @brief Armazena quando foi a última comunicação válida.
+ * 
+ */
+extern volatile int64_t g_last_valid_communication_ms;
+
+/**
  * @brief Constante de Calibração.
+ * 
  */ 
 extern volatile float g_sensor_max_voltage_mv;
 
@@ -52,16 +59,19 @@ extern volatile float g_sensor_max_voltage_mv;
 
 /**
  * @brief Estatística de total de amostras geradas.
+ * 
  */ 
 extern volatile uint32_t g_debug_samples_count;
 
 /**
  * @brief Estatística de total de pacotes HTTP enviados com sucesso.
+ * 
  */ 
 extern volatile uint32_t g_debug_batches_sent;
 
 /**
  * @brief Estatística de total de erros de envio.
+ * 
  */ 
 extern volatile uint32_t g_debug_http_errors;
 

@@ -4,20 +4,22 @@
 #include "esp_log.h"
 #include "shared_resources.h"
 #include "wifi_manager.h"
+#include "esp_timer.h"
 #include "control_task.h"
 #include "http_client_task.h"
 
 QueueHandle_t data_queue;
 SemaphoreHandle_t g_setpoint_mutex;
 
-volatile float g_current_setpoint = 0.0f;
-
-volatile float g_sensor_max_voltage_mv = 3100.0f;
 
 #define WIFI_SSID       "TITANIC"
 #define WIFI_PASSWORD   "$NovaPescaLivre332@;"
 
 static const char *TAG = "APP_MAIN";
+
+volatile float g_current_setpoint = 0.0f;
+volatile float g_sensor_max_voltage_mv = 3100.0f;
+volatile int64_t g_last_valid_communication_ms = 0;
 
 // Definição das variáveis de debug
 volatile uint32_t g_debug_samples_count = 0;
@@ -80,6 +82,7 @@ void system_monitor_task(void *pvParameter) {
  */
 void app_main(void)
 {
+    g_last_valid_communication_ms = esp_timer_get_time() / 1000;
     ESP_LOGI(TAG, "Iniciando aplicação da Planta de Controle.");
 
     // 1. Conecta ao Wi-Fi (esta função é bloqueante)

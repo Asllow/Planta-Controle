@@ -8,9 +8,6 @@
 #include "nvs_flash.h"
 #include "string.h" // Adicionado para a função strncpy
 
-// Adicionamos uma definição local para o número de tentativas
-#define WIFI_MAXIMUM_RETRY 5
-
 static const char *TAG = "WIFI_MANAGER";
 
 // Event group para sinalizar quando estamos conectados
@@ -26,15 +23,15 @@ static void event_handler(void* arg, esp_event_base_t event_base,
     if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START) {
         esp_wifi_connect();
     } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
-        // CORREÇÃO AQUI: Usamos nossa definição local WIFI_MAXIMUM_RETRY
-        if (s_retry_num < WIFI_MAXIMUM_RETRY) {
-            esp_wifi_connect();
-            s_retry_num++;
-            ESP_LOGI(TAG, "Tentando reconectar ao AP");
-        } else {
-            xEventGroupSetBits(s_wifi_event_group, WIFI_FAIL_BIT);
-        }
-        ESP_LOGE(TAG,"Falha ao conectar ao AP");
+        // 1. Loga o erro
+        ESP_LOGW(TAG, "Wi-Fi desconectado! Tentando reconectar...");
+        
+        // 2. Espera um pouco para não travar a CPU com tentativas instantâneas
+        // (O FreeRTOS precisa desse delay para respirar se o roteador sumir)
+        vTaskDelay(pdMS_TO_TICKS(2000)); 
+        
+        // 3. Tenta conectar de novo (sem verificar limite de tentativas)
+        esp_wifi_connect();
     } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
         ip_event_got_ip_t* event = (ip_event_got_ip_t*) event_data;
         ESP_LOGI(TAG, "Conectado! IP obtido: " IPSTR, IP2STR(&event->ip_info.ip));

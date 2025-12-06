@@ -33,6 +33,8 @@ static const char *TAG = "CONTROL_TASK";
 #define MULTIMETER_COMMAND  -2.0f
 #define SWEEP_COMMAND       -3.0f
 
+#define SAFETY_TIMEOUT_MS 5000
+
 // --- Handles e Variáveis Globais do Módulo ---
 static adc_oneshot_unit_handle_t adc2_handle;
 static adc_cali_handle_t adc2_cali_handle = NULL;
@@ -83,6 +85,22 @@ void control_loop_task(void *pvParameter) {
             g_sweep_direction = SWEEP_DIR_UP;
             g_sweep_duty_cycle = 0.0f;
             last_setpoint = setpoint_percent;
+        }
+
+        // --- LÓGICA DE SEGURANÇA ---
+        int64_t now = esp_timer_get_time() / 1000;
+        if ((now - g_last_valid_communication_ms) > SAFETY_TIMEOUT_MS) {
+            // Se já passou do tempo limite, força zero
+            if (setpoint_percent != 0.0f) {
+                ESP_LOGE(TAG, "Failsafe ativado! Perda de comunicação. Parando motor.");
+                setpoint_percent = 0.0f;
+                
+                // Opcional: Atualizar a global para refletir que paramos
+                if (xSemaphoreTake(g_setpoint_mutex, 0) == pdTRUE) {
+                    g_current_setpoint = 0.0f;
+                    xSemaphoreGive(g_setpoint_mutex);
+                }
+            }
         }
 
         if (setpoint_percent == CALIBRATION_COMMAND) {

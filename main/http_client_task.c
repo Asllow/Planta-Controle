@@ -5,6 +5,7 @@
 #include "esp_log.h"
 #include "esp_http_client.h"
 #include "cJSON.h"
+#include "esp_timer.h"
 #include "shared_resources.h"
 #include <inttypes.h>
 #include <string.h>
@@ -103,6 +104,7 @@ void communication_task(void *pvParameter) {
 
                 if (err == ESP_OK) {
                     g_debug_batches_sent++;
+                    g_last_valid_communication_ms = esp_timer_get_time() / 1000;
                     if (response_data.buffer_len > 0) {
                         cJSON *response_root = cJSON_Parse(response_data.buffer);
                         if (response_root) {
