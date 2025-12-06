@@ -196,7 +196,9 @@ static void run_normal_operation(float setpoint_percent) {
 
     current_data.tensao_mv = (uint32_t)current_voltage_mv;
     
-    xQueueSend(data_queue, &current_data, 0);
+    if (xQueueSend(data_queue, &current_data, 0) == pdTRUE) {
+        g_debug_samples_count++; 
+    }
 }
 
 static void motor_pwm_deinit(void) {

@@ -71,7 +71,7 @@ void communication_task(void *pvParameter) {
                 }
             }
 
-            ESP_LOGI(TAG, "Enviando pacote com %d amostras...", num_samples);
+            //ESP_LOGI(TAG, "Enviando pacote com %d amostras...", num_samples);
 
             cJSON *root = cJSON_CreateArray();
             for (int i = 0; i < num_samples; i++) {
@@ -102,6 +102,7 @@ void communication_task(void *pvParameter) {
                 esp_err_t err = esp_http_client_perform(client);
 
                 if (err == ESP_OK) {
+                    g_debug_batches_sent++;
                     if (response_data.buffer_len > 0) {
                         cJSON *response_root = cJSON_Parse(response_data.buffer);
                         if (response_root) {
@@ -117,7 +118,9 @@ void communication_task(void *pvParameter) {
                         }
                     }
                 } else {
+                    g_debug_http_errors++;
                     ESP_LOGE(TAG, "Erro HTTP: %s", esp_err_to_name(err));
+                    vTaskDelay(pdMS_TO_TICKS(1000));
 
                     // --- LÓGICA DE PROTEÇÃO CONTRA LAG ---
                     // Se a fila estiver muito cheia (>800 itens), significa que acumulamos 
