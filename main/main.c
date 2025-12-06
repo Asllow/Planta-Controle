@@ -14,7 +14,6 @@ QueueHandle_t data_queue;
 SemaphoreHandle_t g_setpoint_mutex;
 
 volatile float g_current_setpoint = 0.0f; // Começa com 0 para segurança
-volatile uint32_t g_new_frequency_hz = 0; // 0 significa "sem novo comando"
 
 // Definição da variável de calibração, com um valor inicial padrão/de bancada
 volatile float g_sensor_max_voltage_mv = 3100.0f;

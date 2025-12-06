@@ -47,9 +47,4 @@ extern volatile float g_current_setpoint;
  */ 
 extern volatile float g_sensor_max_voltage_mv;
 
-/**
- * @brief Armazena o valor de uma nova frequência do pwm do motor.
- */
-extern volatile uint32_t g_new_frequency_hz;
-
 #endif // SHARED_RESOURCES_H

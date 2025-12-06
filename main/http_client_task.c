@@ -58,17 +58,14 @@ void communication_task(void *pvParameter) {
     http_response_data_t response_data = {0};
 
     while(1) {
-        // 1. Espera pelo menos um item chegar na fila
         if (xQueueReceive(data_queue, &sample_buffer[0], portMAX_DELAY) == pdPASS) {
-            
+
             int num_samples = 1;
-            // 2. Coleta os outros itens que já estão na fila (batching)
             while (num_samples < 10 && xQueueReceive(data_queue, &sample_buffer[num_samples], 0) == pdPASS) {
                 num_samples++;
             }
             ESP_LOGI(TAG, "Agregando %d amostras para envio.", num_samples);
 
-            // 3. Constrói o array JSON com as amostras coletadas
             cJSON *root = cJSON_CreateArray();
             for (int i = 0; i < num_samples; i++) {
                 cJSON *sample_json = cJSON_CreateObject();
@@ -78,7 +75,6 @@ void communication_task(void *pvParameter) {
                 cJSON_AddNumberToObject(sample_json, "sinal_controle", sample_buffer[i].sinal_controle);
                 cJSON_AddItemToArray(root, sample_json);
             }
-            
             json_payload = cJSON_PrintUnformatted(root);
             cJSON_Delete(root);
 
@@ -98,36 +94,21 @@ void communication_task(void *pvParameter) {
 
                 esp_err_t err = esp_http_client_perform(client);
 
-                // 4. Processa a resposta do servidor
-                if (err == ESP_OK) {
-                    if (response_data.buffer_len > 0) {
-                        cJSON *response_root = cJSON_Parse(response_data.buffer);
-                        if (response_root) {
-                            // Procura por um novo setpoint
-                            cJSON *setpoint_item = cJSON_GetObjectItem(response_root, "new_setpoint");
-                            if (cJSON_IsNumber(setpoint_item)) {
-                                float new_setpoint = setpoint_item->valuedouble;
-                                if (xSemaphoreTake(g_setpoint_mutex, portMAX_DELAY) == pdTRUE) {
-                                    g_current_setpoint = new_setpoint;
-                                    xSemaphoreGive(g_setpoint_mutex);
-                                    ESP_LOGI(TAG, "SUCESSO: Novo setpoint (%.2f) recebido.", new_setpoint);
-                                }
+                if (err == ESP_OK && response_data.buffer_len > 0) {
+                    cJSON *response_root = cJSON_Parse(response_data.buffer);
+                    if (response_root) {
+                        cJSON *setpoint_item = cJSON_GetObjectItem(response_root, "new_setpoint");
+                        if (cJSON_IsNumber(setpoint_item)) {
+                            float new_setpoint = setpoint_item->valuedouble;
+                            if (xSemaphoreTake(g_setpoint_mutex, portMAX_DELAY) == pdTRUE) {
+                                g_current_setpoint = new_setpoint;
+                                xSemaphoreGive(g_setpoint_mutex);
+                                ESP_LOGI(TAG, "SUCESSO: Novo setpoint (%.2f) recebido.", new_setpoint);
                             }
-                            
-                            // Procura por uma nova frequência
-                            cJSON *freq_item = cJSON_GetObjectItem(response_root, "new_frequency");
-                            if (cJSON_IsNumber(freq_item)) {
-                                uint32_t new_freq = (uint32_t)freq_item->valuedouble;
-                                if (new_freq > 0) {
-                                    g_new_frequency_hz = new_freq; // Sinaliza para a outra tarefa
-                                    ESP_LOGI(TAG, "SUCESSO: Novo comando de frequência (%" PRIu32 " Hz) recebido.", new_freq);
-                                }
-                            }
-                            cJSON_Delete(response_root);
                         }
+                        // A lógica para "new_frequency" foi removida
+                        cJSON_Delete(response_root);
                     }
-                } else {
-                    ESP_LOGE(TAG, "Falha na requisição HTTP: %s", esp_err_to_name(err));
                 }
                 esp_http_client_cleanup(client);
                 free(json_payload);

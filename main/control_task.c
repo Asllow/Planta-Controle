@@ -1,6 +1,6 @@
 /**
  * @file control_task.c
- * @brief Versão final e estável, com modos de teste bloqueantes que exigem reset para sair.
+ * @brief Tarefa de controle com frequência de PWM fixa e modos de teste.
  */
 
 #include "freertos/FreeRTOS.h"
@@ -22,23 +22,16 @@ static const char *TAG = "CONTROL_TASK";
 
 // --- Configurações ---
 #define MOTOR_PWM_PIN           GPIO_NUM_21
-#define MOTOR_PWM_FREQUENCY_HZ  10000
+#define MOTOR_PWM_FREQUENCY_HZ  1000 // Frequência agora é fixa
 #define SENSOR_ADC_UNIT         ADC_UNIT_2
 #define SENSOR_ADC_CHANNEL      ADC_CHANNEL_2
 #define SENSOR_ADC_ATTEN        ADC_ATTEN_DB_12
 #define CONTROL_LOOP_FREQUENCY_HZ 20
 
-// --- Parâmetros do Filtro Adaptativo ---
-#define ADC_FILTER_ALPHA_LOW  0.2f
-#define ADC_FILTER_ALPHA_HIGH 0.8f
-#define ADC_FILTER_CHANGE_THRESHOLD_MV 300.0f
-
 // --- Comandos Especiais ---
 #define CALIBRATION_COMMAND -1.0f
 #define MULTIMETER_COMMAND  -2.0f
 #define SWEEP_COMMAND       -3.0f
-#define FREQ_SWEEP_COMMAND  -4.0f
-#define FILTER_TOGGLE_COMMAND -5.0f
 
 // --- Handles e Variáveis Globais do Módulo ---
 static adc_oneshot_unit_handle_t adc2_handle;
@@ -50,195 +43,140 @@ static mcpwm_gen_handle_t generator = NULL;
 static uint32_t timer_resolution_hz;
 static uint32_t mcpwm_period_ticks = 0;
 
-// --- Variáveis de Estado ---
-static bool g_filter_enabled = true;
-static float filtered_voltage_mv = 0.0f;
+// --- Variáveis de Estado para os Modos ---
+static enum { SWEEP_DIR_UP, SWEEP_DIR_DOWN } g_sweep_direction = SWEEP_DIR_UP;
+static float g_sweep_duty_cycle = 0.0f;
+static enum { CALIB_STATE_IDLE, CALIB_STATE_STABILIZING, CALIB_STATE_MEASURING } g_calib_state = CALIB_STATE_IDLE;
+static int64_t g_calib_timer_start = 0;
+static int g_calib_max_voltage = 0;
 
 // --- Protótipos das funções estáticas ---
-static void motor_pwm_init(uint32_t frequency);
+static void motor_pwm_init(void); // Alterado: não recebe mais frequência
 static void motor_pwm_deinit(void);
 static void motor_set_duty_cycle(float duty_cycle);
 static void adc_calibration_init(void);
-static void run_auto_calibration(void);
+static bool run_auto_calibration(void);
 static void run_multimeter_mode(void);
 static void run_sweep_mode(void);
-static void run_frequency_sweep_mode(void);
 static void run_normal_operation(float setpoint_percent);
 
 
 void control_loop_task(void *pvParameter) {
     adc_calibration_init();
-    motor_pwm_init(MOTOR_PWM_FREQUENCY_HZ); 
+    motor_pwm_init(); // Alterado: Chamada sem argumento
     ESP_LOGI(TAG, "Tarefa de Controle iniciada.");
     
     TickType_t xLastWakeTime = xTaskGetTickCount();
     float setpoint_percent = 0.0f;
+    float last_setpoint = 0.0f;
 
     while(1) {
-        if (g_new_frequency_hz > 0) {
-            ESP_LOGW(TAG, "Reconfigurando PWM para %" PRIu32 " Hz...", g_new_frequency_hz);
-            motor_pwm_init(g_new_frequency_hz);
-            g_new_frequency_hz = 0;
-        }
-
+        // Verificação de g_new_frequency_hz foi REMOVIDA
+        
         if (xSemaphoreTake(g_setpoint_mutex, 0) == pdTRUE) {
             setpoint_percent = g_current_setpoint;
             xSemaphoreGive(g_setpoint_mutex);
         }
 
+        if (setpoint_percent != last_setpoint) {
+            ESP_LOGW(TAG, "Modo alterado para %.1f", setpoint_percent);
+            g_calib_state = CALIB_STATE_IDLE;
+            g_sweep_direction = SWEEP_DIR_UP;
+            g_sweep_duty_cycle = 0.0f;
+            last_setpoint = setpoint_percent;
+        }
+
+        // Despachante de modos (sem FREQ_SWEEP e FILTER_TOGGLE)
         if (setpoint_percent == CALIBRATION_COMMAND) {
-            run_auto_calibration();
+            if (run_auto_calibration()) {
+                if (xSemaphoreTake(g_setpoint_mutex, portMAX_DELAY) == pdTRUE) {
+                    g_current_setpoint = 0.0f;
+                    xSemaphoreGive(g_setpoint_mutex);
+                }
+            }
         } else if (setpoint_percent == MULTIMETER_COMMAND) {
             run_multimeter_mode();
         } else if (setpoint_percent == SWEEP_COMMAND) {
             run_sweep_mode();
-        } else if (setpoint_percent == FREQ_SWEEP_COMMAND) {
-            run_frequency_sweep_mode();
-        } else if (setpoint_percent == FILTER_TOGGLE_COMMAND) {
-            g_filter_enabled = !g_filter_enabled;
-            ESP_LOGW(TAG, "Filtro digital %s. Reiniciando para o modo normal.", g_filter_enabled ? "ATIVADO" : "DESATIVADO");
-            if (xSemaphoreTake(g_setpoint_mutex, portMAX_DELAY) == pdTRUE) {
-                g_current_setpoint = 0.0f;
-                xSemaphoreGive(g_setpoint_mutex);
-            }
+        } else {
+            run_normal_operation(setpoint_percent);
         }
         
-        run_normal_operation(setpoint_percent);
         vTaskDelayUntil(&xLastWakeTime, pdMS_TO_TICKS(1000 / CONTROL_LOOP_FREQUENCY_HZ));
     }
 }
 
-static void run_auto_calibration(void) {
-    ESP_LOGW(TAG, "--- MODO DE CALIBRAÇÃO ---");
-    motor_set_duty_cycle(100.0f);
-    ESP_LOGW(TAG, "Motor a 100%. Estabilizando por 3s...");
-    vTaskDelay(pdMS_TO_TICKS(3000));
-    
-    ESP_LOGW(TAG, "Medindo tensão PICO por 5s...");
-    int max_voltage_found_mv = 0;
-    for (int i = 0; i < 50; i++) {
-        int raw_value, current_mv;
-        if (adc_oneshot_read(adc2_handle, SENSOR_ADC_CHANNEL, &raw_value) == ESP_OK) {
-            if (adc_cali_raw_to_voltage(adc2_cali_handle, raw_value, &current_mv) == ESP_OK) {
-                if (current_mv > max_voltage_found_mv) max_voltage_found_mv = current_mv;
+static bool run_auto_calibration(void) {
+    switch (g_calib_state) {
+        case CALIB_STATE_IDLE:
+            ESP_LOGW(TAG, "Calibração: Iniciando... Motor a 100%.");
+            motor_set_duty_cycle(100.0f);
+            g_calib_timer_start = esp_timer_get_time();
+            g_calib_max_voltage = 0;
+            g_calib_state = CALIB_STATE_STABILIZING;
+            return false;
+
+        case CALIB_STATE_STABILIZING:
+            if ((esp_timer_get_time() - g_calib_timer_start) > 3000000) { // 3s
+                ESP_LOGW(TAG, "Calibração: Medindo por 5s...");
+                g_calib_timer_start = esp_timer_get_time();
+                g_calib_state = CALIB_STATE_MEASURING;
             }
-        }
-        vTaskDelay(pdMS_TO_TICKS(100));
-    }
+            return false;
 
-    motor_set_duty_cycle(0.0f);
-    if (max_voltage_found_mv > 1000) {
-        g_sensor_max_voltage_mv = (float)max_voltage_found_mv;
-        ESP_LOGW(TAG, "--- CALIBRAÇÃO CONCLUÍDA! Novo máximo: %.0f mV ---", g_sensor_max_voltage_mv);
-    } else {
-        ESP_LOGE(TAG, "--- FALHA NA CALIBRAÇÃO! ---");
+        case CALIB_STATE_MEASURING:
+            if ((esp_timer_get_time() - g_calib_timer_start) < 5000000) { // 5s
+                int raw_value, current_mv;
+                if (adc_oneshot_read(adc2_handle, SENSOR_ADC_CHANNEL, &raw_value) == ESP_OK &&
+                    adc_cali_raw_to_voltage(adc2_cali_handle, raw_value, &current_mv) == ESP_OK) {
+                    if (current_mv > g_calib_max_voltage) g_calib_max_voltage = current_mv;
+                }
+            } else {
+                motor_set_duty_cycle(0.0f);
+                if (g_calib_max_voltage > 1000) {
+                    g_sensor_max_voltage_mv = (float)g_calib_max_voltage;
+                    ESP_LOGW(TAG, "--- CALIBRAÇÃO CONCLUÍDA! Novo máximo: %.0f mV ---", g_sensor_max_voltage_mv);
+                } else {
+                    ESP_LOGE(TAG, "--- FALHA NA CALIBRAÇÃO! ---");
+                }
+                g_calib_state = CALIB_STATE_IDLE;
+                return true; // Terminou!
+            }
+            return false;
     }
-
-    ESP_LOGW(TAG, "Modo concluído. O sistema ficará inerte. Pressione RESET para usar outro modo.");
-    while(1) { vTaskDelay(portMAX_DELAY); }
+    return true; // Estado inválido, termina.
 }
 
 static void run_multimeter_mode(void) {
-    ESP_LOGW(TAG, "--- MODO MULTÍMETRO ---. Pressione RESET para sair.");
     motor_set_duty_cycle(100.0f);
-    uint32_t max_voltage_mv = 0;
-
-    while (true) {
-        int raw_value, current_voltage_mv = 0;
-        if (adc_oneshot_read(adc2_handle, SENSOR_ADC_CHANNEL, &raw_value) == ESP_OK) {
-            adc_cali_raw_to_voltage(adc2_cali_handle, raw_value, &current_voltage_mv);
-        }
-        if (current_voltage_mv > max_voltage_mv) max_voltage_mv = current_voltage_mv;
-        
-        ESP_LOGI(TAG, "Duty: 100%% | Tensão: %4d mV | Máxima: %4" PRIu32 " mV", current_voltage_mv, max_voltage_mv);
-        vTaskDelay(pdMS_TO_TICKS(500));
+    int raw_value, current_voltage_mv = 0;
+    if (adc_oneshot_read(adc2_handle, SENSOR_ADC_CHANNEL, &raw_value) == ESP_OK) {
+        adc_cali_raw_to_voltage(adc2_cali_handle, raw_value, &current_voltage_mv);
     }
+    ESP_LOGI(TAG, "Multímetro | Tensão: %4d mV", current_voltage_mv);
 }
 
 static void run_sweep_mode(void) {
-    ESP_LOGW(TAG, "--- MODO DE VARREDURA DE DUTY CYCLE ---. Pressione RESET para sair.");
-    
-    while(true) { 
-        ESP_LOGW(TAG, "Varredura: Subindo (0%% -> 100%%)...");
-        for (float duty_cycle = 0.0f; duty_cycle <= 100.0f; duty_cycle += 1.0f) {
-            motor_set_duty_cycle(duty_cycle);
-            int raw_value, voltage_mv = 0;
-            if (adc_oneshot_read(adc2_handle, SENSOR_ADC_CHANNEL, &raw_value) == ESP_OK) {
-                adc_cali_raw_to_voltage(adc2_cali_handle, raw_value, &voltage_mv);
-                ESP_LOGI(TAG, "Duty: %3.0f%% | Tensão: %4d mV", duty_cycle, voltage_mv);
-            }
-            vTaskDelay(pdMS_TO_TICKS(50));
+    if (g_sweep_direction == SWEEP_DIR_UP) {
+        g_sweep_duty_cycle += 0.5f;
+        if (g_sweep_duty_cycle >= 100.0f) {
+            g_sweep_duty_cycle = 100.0f;
+            g_sweep_direction = SWEEP_DIR_DOWN;
         }
-
-        ESP_LOGW(TAG, "Varredura: Descendo (100%% -> 0%%)...");
-        for (float duty_cycle = 100.0f; duty_cycle >= 0.0f; duty_cycle -= 1.0f) {
-            motor_set_duty_cycle(duty_cycle);
-            int raw_value, voltage_mv = 0;
-            if (adc_oneshot_read(adc2_handle, SENSOR_ADC_CHANNEL, &raw_value) == ESP_OK) {
-                adc_cali_raw_to_voltage(adc2_cali_handle, raw_value, &voltage_mv);
-                ESP_LOGI(TAG, "Duty: %3.0f%% | Tensão: %4d mV", duty_cycle, voltage_mv);
-            }
-            vTaskDelay(pdMS_TO_TICKS(50));
+    } else { // SWEEP_DIR_DOWN
+        g_sweep_duty_cycle -= 0.5f;
+        if (g_sweep_duty_cycle <= 0.0f) {
+            g_sweep_duty_cycle = 0.0f;
+            g_sweep_direction = SWEEP_DIR_UP;
         }
-        ESP_LOGW(TAG, "Varredura: Ciclo completo. Reiniciando em 2s...");
-        vTaskDelay(pdMS_TO_TICKS(2000));
-    }
-}
-
-static void run_frequency_sweep_mode(void) {
-    ESP_LOGW(TAG, "--- MODO DE VARREDURA DE FREQUÊNCIAS ---. Pressione RESET para sair.");
-    motor_set_duty_cycle(0);
-    vTaskDelay(pdMS_TO_TICKS(2000));
-
-    const uint32_t frequencies_to_test[] = {
-        1000, 5000, 10000, 15000, 20000, 25000, 30000, 35000
-    };
-    int num_frequencies = sizeof(frequencies_to_test) / sizeof(frequencies_to_test[0]);
-
-    printf("---INICIO-DOS-DADOS---\n");
-    printf("Frequencia(Hz)");
-    for(int i = 0; i <= 100; i++) { printf(",Duty_%d%%", i); }
-    printf("\n");
-
-    for (int i = 0; i < num_frequencies; i++) {
-        uint32_t current_frequency = frequencies_to_test[i];
-        ESP_LOGI(TAG, "Coletando dados para %" PRIu32 " Hz...", current_frequency);
-        
-        uint32_t voltage_readings[101];
-        motor_pwm_init(current_frequency);
-        vTaskDelay(pdMS_TO_TICKS(100));
-
-        for (int duty_percent = 0; duty_percent <= 100; duty_percent++) {
-            motor_set_duty_cycle(duty_percent);
-            vTaskDelay(pdMS_TO_TICKS(50));
-            
-            int raw_adc, voltage_mv = 0;
-            if (adc_oneshot_read(adc2_handle, SENSOR_ADC_CHANNEL, &raw_adc) == ESP_OK) {
-                adc_cali_raw_to_voltage(adc2_cali_handle, raw_adc, &voltage_mv);
-            }
-            voltage_readings[duty_percent] = voltage_mv;
-        }
-
-        printf("%" PRIu32, current_frequency);
-        for (int j = 0; j <= 100; j++) { printf(",%" PRIu32, voltage_readings[j]); }
-        printf("\n");
-        
-        vTaskDelay(pdMS_TO_TICKS(1000));
     }
 
-    printf("---FIM-DOS-DADOS---\n");
-    ESP_LOGW(TAG, "Teste de varredura de frequências completo.");
-    ESP_LOGW(TAG, "O sistema ficará inerte. Pressione RESET para usar outro modo.");
-
-    motor_pwm_deinit();
-    motor_pwm_init(MOTOR_PWM_FREQUENCY_HZ);
-
-    if (xSemaphoreTake(g_setpoint_mutex, portMAX_DELAY) == pdTRUE) {
-        g_current_setpoint = 0.0f;
-        xSemaphoreGive(g_setpoint_mutex);
+    motor_set_duty_cycle(g_sweep_duty_cycle);
+    int raw_value, voltage_mv = 0;
+    if (adc_oneshot_read(adc2_handle, SENSOR_ADC_CHANNEL, &raw_value) == ESP_OK) {
+        adc_cali_raw_to_voltage(adc2_cali_handle, raw_value, &voltage_mv);
     }
-    
-    while(1) { vTaskDelay(portMAX_DELAY); }
+    ESP_LOGI(TAG, "Sweep | Duty: %5.1f%% | Tensão: %4d mV", g_sweep_duty_cycle, voltage_mv);
 }
 
 static void run_normal_operation(float setpoint_percent) {
@@ -258,17 +196,13 @@ static void run_normal_operation(float setpoint_percent) {
         current_data.valor_adc_raw = -1;
     }
 
-    if (g_filter_enabled) {
-        float delta = fabsf(current_voltage_mv - filtered_voltage_mv);
-        float alpha = (delta > ADC_FILTER_CHANGE_THRESHOLD_MV) ? ADC_FILTER_ALPHA_HIGH : ADC_FILTER_ALPHA_LOW;
-        filtered_voltage_mv = (alpha * current_voltage_mv) + ((1.0f - alpha) * filtered_voltage_mv);
-        current_data.tensao_mv = (uint32_t)filtered_voltage_mv;
-    } else {
-        current_data.tensao_mv = (uint32_t)current_voltage_mv;
-    }
+    // A lógica do filtro foi REMOVIDA
+    current_data.tensao_mv = (uint32_t)current_voltage_mv;
     
     xQueueSend(data_queue, &current_data, 0);
 }
+
+// A função run_frequency_sweep_mode foi REMOVIDA
 
 static void motor_pwm_deinit(void) {
     if (timer) {
@@ -282,12 +216,13 @@ static void motor_pwm_deinit(void) {
     }
 }
 
-static void motor_pwm_init(uint32_t frequency) {
+// Alterada: não recebe mais 'frequency' como argumento
+static void motor_pwm_init(void) {
     motor_pwm_deinit();
     mcpwm_timer_config_t timer_config = {
         .group_id = 0, .clk_src = MCPWM_TIMER_CLK_SRC_DEFAULT,
         .resolution_hz = 10 * 1000 * 1000, .count_mode = MCPWM_TIMER_COUNT_MODE_UP,
-        .period_ticks = (10 * 1000 * 1000) / frequency,
+        .period_ticks = (10 * 1000 * 1000) / MOTOR_PWM_FREQUENCY_HZ, // Usa a constante
     };
     ESP_ERROR_CHECK(mcpwm_new_timer(&timer_config, &timer));
     timer_resolution_hz = timer_config.resolution_hz;
