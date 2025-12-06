@@ -26,7 +26,7 @@ static const char *TAG = "CONTROL_TASK";
 #define SENSOR_ADC_UNIT         ADC_UNIT_2
 #define SENSOR_ADC_CHANNEL      ADC_CHANNEL_2
 #define SENSOR_ADC_ATTEN        ADC_ATTEN_DB_12
-#define CONTROL_LOOP_FREQUENCY_HZ 20
+#define CONTROL_LOOP_FREQUENCY_HZ 200
 
 // --- Comandos Especiais ---
 #define CALIBRATION_COMMAND -1.0f
@@ -63,7 +63,7 @@ static void run_normal_operation(float setpoint_percent);
 
 void control_loop_task(void *pvParameter) {
     adc_calibration_init();
-    motor_pwm_init(); // Alterado: Chamada sem argumento
+    motor_pwm_init();
     ESP_LOGI(TAG, "Tarefa de Controle iniciada.");
     
     TickType_t xLastWakeTime = xTaskGetTickCount();
@@ -71,7 +71,6 @@ void control_loop_task(void *pvParameter) {
     float last_setpoint = 0.0f;
 
     while(1) {
-        // Verificação de g_new_frequency_hz foi REMOVIDA
         
         if (xSemaphoreTake(g_setpoint_mutex, 0) == pdTRUE) {
             setpoint_percent = g_current_setpoint;
@@ -86,7 +85,6 @@ void control_loop_task(void *pvParameter) {
             last_setpoint = setpoint_percent;
         }
 
-        // Despachante de modos (sem FREQ_SWEEP e FILTER_TOGGLE)
         if (setpoint_percent == CALIBRATION_COMMAND) {
             if (run_auto_calibration()) {
                 if (xSemaphoreTake(g_setpoint_mutex, portMAX_DELAY) == pdTRUE) {
@@ -196,13 +194,10 @@ static void run_normal_operation(float setpoint_percent) {
         current_data.valor_adc_raw = -1;
     }
 
-    // A lógica do filtro foi REMOVIDA
     current_data.tensao_mv = (uint32_t)current_voltage_mv;
     
     xQueueSend(data_queue, &current_data, 0);
 }
-
-// A função run_frequency_sweep_mode foi REMOVIDA
 
 static void motor_pwm_deinit(void) {
     if (timer) {
@@ -216,7 +211,6 @@ static void motor_pwm_deinit(void) {
     }
 }
 
-// Alterada: não recebe mais 'frequency' como argumento
 static void motor_pwm_init(void) {
     motor_pwm_deinit();
     mcpwm_timer_config_t timer_config = {

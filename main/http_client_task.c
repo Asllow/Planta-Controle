@@ -12,6 +12,7 @@
 static const char *TAG = "HTTP_CLIENT_TASK";
 
 #define SERVER_URL "http://192.168.100.132:5000/data"
+#define BATCH_SIZE 50
 
 // --- Estrutura para passar dados para o event handler ---
 typedef struct {
@@ -53,7 +54,7 @@ esp_err_t _http_event_handler(esp_http_client_event_t *evt) {
 void communication_task(void *pvParameter) {
     ESP_LOGI(TAG, "Tarefa de Comunicação iniciada no Core %d", xPortGetCoreID());
 
-    control_data_t sample_buffer[10];
+    control_data_t sample_buffer[BATCH_SIZE];
     char *json_payload = NULL;
     http_response_data_t response_data = {0};
 
@@ -61,10 +62,20 @@ void communication_task(void *pvParameter) {
         if (xQueueReceive(data_queue, &sample_buffer[0], portMAX_DELAY) == pdPASS) {
 
             int num_samples = 1;
-            while (num_samples < 10 && xQueueReceive(data_queue, &sample_buffer[num_samples], 0) == pdPASS) {
-                num_samples++;
+
+            // 2. Tenta preencher o resto do buffer até completar o BATCH_SIZE
+            // Usamos um timeout pequeno (ex: 10 ticks) para não travar se o motor parar,
+            // mas a ideia é esperar encher.
+            while (num_samples < BATCH_SIZE) {
+                if(xQueueReceive(data_queue, &sample_buffer[num_samples], 10) == pdPASS) {
+                    num_samples++;
+                } else {
+                     // Se demorar muito para chegar dados, envia o que tem
+                    break; 
+                }
             }
-            ESP_LOGI(TAG, "Agregando %d amostras para envio.", num_samples);
+
+            ESP_LOGI(TAG, "Enviando pacote com %d amostras...", num_samples);
 
             cJSON *root = cJSON_CreateArray();
             for (int i = 0; i < num_samples; i++) {

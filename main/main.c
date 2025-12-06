@@ -7,15 +7,11 @@
 #include "control_task.h"
 #include "http_client_task.h"
 
-// --- Definição das Variáveis Globais ---
-// Estas são as definições reais das variáveis declaradas como 'extern' em shared_resources.h
-
 QueueHandle_t data_queue;
 SemaphoreHandle_t g_setpoint_mutex;
 
-volatile float g_current_setpoint = 0.0f; // Começa com 0 para segurança
+volatile float g_current_setpoint = 0.0f;
 
-// Definição da variável de calibração, com um valor inicial padrão/de bancada
 volatile float g_sensor_max_voltage_mv = 3100.0f;
 
 #define WIFI_SSID       "TITANIC"
@@ -39,7 +35,7 @@ void app_main(void)
 
     // 2. Cria a Fila para comunicar os dados.
     // Terá espaço para 10 pacotes de dados.
-    data_queue = xQueueCreate(10, sizeof(control_data_t));
+    data_queue = xQueueCreate(200, sizeof(control_data_t));
     if(data_queue == NULL){
         ESP_LOGE(TAG, "Falha ao criar a fila.");
         return; // Falha crítica
