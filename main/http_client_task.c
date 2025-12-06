@@ -124,7 +124,7 @@ void communication_task(void *pvParameter) {
 
                     // --- LÓGICA DE PROTEÇÃO CONTRA LAG ---
                     // Se a fila estiver muito cheia (>800 itens), significa que acumulamos 
-                    // 4 segundos de atraso. Limpamos tudo para ver o "agora".
+                    // 4 segundos de atraso. Limpamos tudo para ver o "agora"
                     UBaseType_t items_waiting = uxQueueMessagesWaiting(data_queue);
                     if (items_waiting > 800) {
                         xQueueReset(data_queue);
