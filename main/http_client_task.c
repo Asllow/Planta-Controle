@@ -62,16 +62,12 @@ void communication_task(void *pvParameter) {
         if (xQueueReceive(data_queue, &sample_buffer[0], portMAX_DELAY) == pdPASS) {
 
             int num_samples = 1;
-
-            // 2. Tenta preencher o resto do buffer até completar o BATCH_SIZE
-            // Usamos um timeout pequeno (ex: 10 ticks) para não travar se o motor parar,
-            // mas a ideia é esperar encher.
             while (num_samples < BATCH_SIZE) {
-                if(xQueueReceive(data_queue, &sample_buffer[num_samples], 10) == pdPASS) {
+                // Espera no máximo 10 ticks pela próxima amostra para não travar o envio
+                if (xQueueReceive(data_queue, &sample_buffer[num_samples], 10) == pdPASS) {
                     num_samples++;
                 } else {
-                     // Se demorar muito para chegar dados, envia o que tem
-                    break; 
+                    break; // Envia o que tem se demorar
                 }
             }
 
@@ -95,7 +91,7 @@ void communication_task(void *pvParameter) {
                     .url = SERVER_URL,
                     .event_handler = _http_event_handler,
                     .user_data = &response_data,
-                    .timeout_ms = 5000,
+                    .timeout_ms = 1000,
                 };
 
                 esp_http_client_handle_t client = esp_http_client_init(&config);
@@ -105,20 +101,31 @@ void communication_task(void *pvParameter) {
 
                 esp_err_t err = esp_http_client_perform(client);
 
-                if (err == ESP_OK && response_data.buffer_len > 0) {
-                    cJSON *response_root = cJSON_Parse(response_data.buffer);
-                    if (response_root) {
-                        cJSON *setpoint_item = cJSON_GetObjectItem(response_root, "new_setpoint");
-                        if (cJSON_IsNumber(setpoint_item)) {
-                            float new_setpoint = setpoint_item->valuedouble;
-                            if (xSemaphoreTake(g_setpoint_mutex, portMAX_DELAY) == pdTRUE) {
-                                g_current_setpoint = new_setpoint;
-                                xSemaphoreGive(g_setpoint_mutex);
-                                ESP_LOGI(TAG, "SUCESSO: Novo setpoint (%.2f) recebido.", new_setpoint);
+                if (err == ESP_OK) {
+                    if (response_data.buffer_len > 0) {
+                        cJSON *response_root = cJSON_Parse(response_data.buffer);
+                        if (response_root) {
+                            cJSON *setpoint_item = cJSON_GetObjectItem(response_root, "new_setpoint");
+                            if (cJSON_IsNumber(setpoint_item)) {
+                                float new_setpoint = setpoint_item->valuedouble;
+                                if (xSemaphoreTake(g_setpoint_mutex, portMAX_DELAY) == pdTRUE) {
+                                    g_current_setpoint = new_setpoint;
+                                    xSemaphoreGive(g_setpoint_mutex);
+                                }
                             }
+                            cJSON_Delete(response_root);
                         }
-                        // A lógica para "new_frequency" foi removida
-                        cJSON_Delete(response_root);
+                    }
+                } else {
+                    ESP_LOGE(TAG, "Erro HTTP: %s", esp_err_to_name(err));
+
+                    // --- LÓGICA DE PROTEÇÃO CONTRA LAG ---
+                    // Se a fila estiver muito cheia (>800 itens), significa que acumulamos 
+                    // 4 segundos de atraso. Limpamos tudo para ver o "agora".
+                    UBaseType_t items_waiting = uxQueueMessagesWaiting(data_queue);
+                    if (items_waiting > 800) {
+                        xQueueReset(data_queue);
+                        ESP_LOGW(TAG, "!!! FILA RESETADA !!! Descartados %d itens antigos para recuperar tempo real.", items_waiting);
                     }
                 }
                 esp_http_client_cleanup(client);

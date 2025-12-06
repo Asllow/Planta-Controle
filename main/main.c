@@ -34,8 +34,7 @@ void app_main(void)
     wifi_init_sta(WIFI_SSID, WIFI_PASSWORD);
 
     // 2. Cria a Fila para comunicar os dados.
-    // Terá espaço para 10 pacotes de dados.
-    data_queue = xQueueCreate(200, sizeof(control_data_t));
+    data_queue = xQueueCreate(1000, sizeof(control_data_t));
     if(data_queue == NULL){
         ESP_LOGE(TAG, "Falha ao criar a fila.");
         return; // Falha crítica
