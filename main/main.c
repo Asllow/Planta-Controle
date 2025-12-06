@@ -82,29 +82,19 @@ void system_monitor_task(void *pvParameter) {
  */
 void app_main(void)
 {
-    g_last_valid_communication_ms = esp_timer_get_time() / 1000;
     ESP_LOGI(TAG, "Iniciando aplicação da Planta de Controle.");
 
-    // 1. Conecta ao Wi-Fi (esta função é bloqueante)
-    wifi_init_sta(WIFI_SSID, WIFI_PASSWORD);
-
-    // 2. Cria a Fila para comunicar os dados.
     data_queue = xQueueCreate(1000, sizeof(control_data_t));
-    if(data_queue == NULL){
-        ESP_LOGE(TAG, "Falha ao criar a fila.");
-        return; // Falha crítica
-    }
-
-    // 3. Cria o Mutex para proteger a variável de setpoint
     g_setpoint_mutex = xSemaphoreCreateMutex();
-    if(g_setpoint_mutex == NULL){
-        ESP_LOGE(TAG, "Falha ao criar o mutex.");
-        return; // Falha crítica
+    
+    // Inicializa variáveis globais de segurança
+    g_last_valid_communication_ms = esp_timer_get_time() / 1000;
+
+    if(data_queue == NULL || g_setpoint_mutex == NULL){
+        ESP_LOGE(TAG, "Falha crítica na criação de recursos.");
+        return;
     }
 
-    ESP_LOGI(TAG, "Recursos criados. Iniciando tarefas principais...");
-
-    // 4. Cria a tarefa de controle e a "pina" no Core 0 (PRO_CPU)
     // Core 0 é ideal para tarefas de tempo real e controle de periféricos.
     xTaskCreatePinnedToCore(
                     control_loop_task,   // Função da tarefa
@@ -115,7 +105,11 @@ void app_main(void)
                     NULL,                // Handle da tarefa
                     0);                  // Core ID 0
 
-    // 5. Cria a tarefa de comunicação e a "pina" no Core 1 (APP_CPU)
+    ESP_LOGI(TAG, "Controle ativo. Iniciando conexão Wi-Fi...");
+
+
+    wifi_init_sta(WIFI_SSID, WIFI_PASSWORD);
+
     // Core 1 é ideal para tarefas "pesadas" como o stack de rede.
     xTaskCreatePinnedToCore(
                     communication_task,     // Função da tarefa
@@ -125,8 +119,7 @@ void app_main(void)
                     5,                      // Prioridade normal
                     NULL,                   // Handle da tarefa
                     1);                     // Core ID 1
-    
-    // 6. Cria a tarefa de MONITORAMENTO (Pode rodar no Core 1 com baixa prioridade)
+
     xTaskCreatePinnedToCore(
                     system_monitor_task,
                     "Monitor",
