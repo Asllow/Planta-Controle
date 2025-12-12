@@ -114,7 +114,7 @@ void app_main(void)
     xTaskCreatePinnedToCore(
                     communication_task,     // Função da tarefa
                     "Tarefa de Comunicação",// Nome
-                    8192,                   // Stack maior por causa do Wi-Fi/TLS
+                    16384,                   // Stack maior por causa do Wi-Fi/TLS
                     NULL,                   // Parâmetros
                     5,                      // Prioridade normal
                     NULL,                   // Handle da tarefa
