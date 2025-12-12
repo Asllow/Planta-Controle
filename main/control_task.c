@@ -52,6 +52,13 @@ static enum { CALIB_STATE_IDLE, CALIB_STATE_STABILIZING, CALIB_STATE_MEASURING }
 static int64_t g_calib_timer_start = 0;
 static int g_calib_max_voltage = 0;
 
+// --- Variáveis do Multímetro ---
+static int g_multimeter_max = 0;           // Pico Máximo da Sessão (Desde que ligou o modo)
+static int g_rolling_buffer[5] = {0};      // Buffer dos últimos 5 segundos (1 slot por segundo)
+static int g_rolling_idx = 0;              // Índice atual do buffer
+static int g_temp_sec_max = 0;             // Máximo do segundo atual (sendo construído)
+static int64_t g_last_roll_time = 0;       // Cronômetro para girar o buffer
+
 // --- Protótipos das funções estáticas ---
 static void motor_pwm_init(void); // Alterado: não recebe mais frequência
 static void motor_pwm_deinit(void);
@@ -84,21 +91,33 @@ void control_loop_task(void *pvParameter) {
             g_calib_state = CALIB_STATE_IDLE;
             g_sweep_direction = SWEEP_DIR_UP;
             g_sweep_duty_cycle = 0.0f;
+            
+            // --- RESET COMPLETO DO MULTÍMETRO ---
+            g_multimeter_max = 0;
+            memset(g_rolling_buffer, 0, sizeof(g_rolling_buffer)); // Limpa histórico
+            g_rolling_idx = 0;
+            g_temp_sec_max = 0;
+            g_last_roll_time = esp_timer_get_time(); // Reinicia cronômetro
+            // ------------------------------------
+            
             last_setpoint = setpoint_percent;
         }
 
         // --- LÓGICA DE SEGURANÇA ---
-        int64_t now = esp_timer_get_time() / 1000;
-        if ((now - g_last_valid_communication_ms) > SAFETY_TIMEOUT_MS) {
-            // Se já passou do tempo limite, força zero
-            if (setpoint_percent != 0.0f) {
-                ESP_LOGE(TAG, "Failsafe ativado! Perda de comunicação. Parando motor.");
-                setpoint_percent = 0.0f;
-                
-                // Opcional: Atualizar a global para refletir que paramos
-                if (xSemaphoreTake(g_setpoint_mutex, 0) == pdTRUE) {
-                    g_current_setpoint = 0.0f;
-                    xSemaphoreGive(g_setpoint_mutex);
+        // Só aplica timeout se estiver em modo NORMAL (positivo).
+        // Modos de teste (-1, -2, -3) ignoram a falta de rede.
+        if (setpoint_percent >= 0.0f) {
+            int64_t now = esp_timer_get_time() / 1000;
+            if ((now - g_last_valid_communication_ms) > SAFETY_TIMEOUT_MS) {
+                if (setpoint_percent != 0.0f) {
+                    ESP_LOGE(TAG, "Failsafe ativado! Perda de comunicação. Parando motor.");
+                    setpoint_percent = 0.0f;
+                    
+                    // Atualiza a global para refletir que paramos
+                    if (xSemaphoreTake(g_setpoint_mutex, 0) == pdTRUE) {
+                        g_current_setpoint = 0.0f;
+                        xSemaphoreGive(g_setpoint_mutex);
+                    }
                 }
             }
         }
@@ -166,33 +185,89 @@ static bool run_auto_calibration(void) {
 static void run_multimeter_mode(void) {
     motor_set_duty_cycle(100.0f);
     int raw_value, current_voltage_mv = 0;
+    
+    // Leitura (Roda a 200Hz)
     if (adc_oneshot_read(adc2_handle, SENSOR_ADC_CHANNEL, &raw_value) == ESP_OK) {
         adc_cali_raw_to_voltage(adc2_cali_handle, raw_value, &current_voltage_mv);
     }
-    ESP_LOGI(TAG, "Multímetro | Tensão: %4d mV", current_voltage_mv);
-}
 
-static void run_sweep_mode(void) {
-    if (g_sweep_direction == SWEEP_DIR_UP) {
-        g_sweep_duty_cycle += 0.5f;
-        if (g_sweep_duty_cycle >= 100.0f) {
-            g_sweep_duty_cycle = 100.0f;
-            g_sweep_direction = SWEEP_DIR_DOWN;
-        }
-    } else { // SWEEP_DIR_DOWN
-        g_sweep_duty_cycle -= 0.5f;
-        if (g_sweep_duty_cycle <= 0.0f) {
-            g_sweep_duty_cycle = 0.0f;
-            g_sweep_direction = SWEEP_DIR_UP;
+    // 1. Atualiza Pico da Sessão (Máximo absoluto)
+    if (current_voltage_mv > g_multimeter_max) {
+        g_multimeter_max = current_voltage_mv;
+    }
+
+    // 2. Lógica Inteligente dos Últimos 5 Segundos
+    // Primeiro, descobre qual o maior valor DESTE segundo atual
+    if (current_voltage_mv > g_temp_sec_max) {
+        g_temp_sec_max = current_voltage_mv;
+    }
+
+    int64_t now_us = esp_timer_get_time(); // Tempo em microsegundos
+    
+    // Se passou 1 segundo, salva o "vencedor" no histórico e abre nova votação
+    if ((now_us - g_last_roll_time) > 1000000) {
+        g_rolling_buffer[g_rolling_idx] = g_temp_sec_max; // Salva
+        g_rolling_idx = (g_rolling_idx + 1) % 5;          // Avança circularmente (0..4)
+        
+        g_temp_sec_max = 0; // Reseta para o próximo segundo
+        g_last_roll_time = now_us;
+    }
+
+    // Calcula quem é o maior dos últimos 5 segundos (varre o histórico + atual)
+    int max_5s = g_temp_sec_max;
+    for (int i = 0; i < 5; i++) {
+        if (g_rolling_buffer[i] > max_5s) {
+            max_5s = g_rolling_buffer[i];
         }
     }
 
+    // 3. Print Formatado (a cada 500ms)
+    static int64_t last_log_time_ms = 0;
+    int64_t now_ms = now_us / 1000;
+    
+    if ((now_ms - last_log_time_ms) > 500) {
+        ESP_LOGI(TAG, "Mult: Atual %4d mV | Max(5s) %4d mV | Max(Total) %4d mV", 
+                    current_voltage_mv, max_5s, g_multimeter_max);
+        last_log_time_ms = now_ms;
+    }
+}
+
+static void run_sweep_mode(void) {
+    // Controla a velocidade da varredura (atualiza a cada 50ms)
+    static int64_t last_step_time = 0;
+    int64_t now = esp_timer_get_time() / 1000;
+
+    if ((now - last_step_time) > 50) {
+        if (g_sweep_direction == SWEEP_DIR_UP) {
+            g_sweep_duty_cycle += 0.5f;
+            if (g_sweep_duty_cycle >= 100.0f) {
+                g_sweep_duty_cycle = 100.0f;
+                g_sweep_direction = SWEEP_DIR_DOWN;
+            }
+        } else { 
+            g_sweep_duty_cycle -= 0.5f;
+            if (g_sweep_duty_cycle <= 0.0f) {
+                g_sweep_duty_cycle = 0.0f;
+                g_sweep_direction = SWEEP_DIR_UP;
+            }
+        }
+        last_step_time = now;
+    }
+
     motor_set_duty_cycle(g_sweep_duty_cycle);
+    
+    // Leitura apenas para log visual
     int raw_value, voltage_mv = 0;
     if (adc_oneshot_read(adc2_handle, SENSOR_ADC_CHANNEL, &raw_value) == ESP_OK) {
         adc_cali_raw_to_voltage(adc2_cali_handle, raw_value, &voltage_mv);
     }
-    ESP_LOGI(TAG, "Sweep | Duty: %5.1f%% | Tensão: %4d mV", g_sweep_duty_cycle, voltage_mv);
+    
+    // Log do Sweep limitado a 200ms para não travar o terminal
+    static int64_t last_log_sweep = 0;
+    if ((now - last_log_sweep) > 200) {
+        ESP_LOGI(TAG, "Sweep | Duty: %5.1f%% | Tensão: %4d mV", g_sweep_duty_cycle, voltage_mv);
+        last_log_sweep = now;
+    }
 }
 
 static void run_normal_operation(float setpoint_percent) {
