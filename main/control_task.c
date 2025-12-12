@@ -28,6 +28,17 @@ static const char *TAG = "CONTROL_TASK";
 #define SENSOR_ADC_ATTEN        ADC_ATTEN_DB_12
 #define CONTROL_LOOP_FREQUENCY_HZ 200
 
+// --- PARÂMETROS DO CONTROLADOR PI (Malha Fechada) ---
+// Planta: K=0.811, tau=0.135s | Ts=5ms
+// Método: Síntese Direta
+#define PI_Q0      2.422f
+#define PI_Q1     -2.334f
+#define MAX_VOLTAGE_OUT 3.1f // CORREÇÃO: Tensão de saturação do ADC do S3 (12dB)
+
+// --- Variáveis de Estado do Controlador ---
+static float g_u_prev = 0.0f; // Ação de controle anterior (u[k-1])
+static float g_e_prev = 0.0f; // Erro anterior (e[k-1])
+
 // --- Comandos Especiais ---
 #define CALIBRATION_COMMAND -1.0f
 #define MULTIMETER_COMMAND  -2.0f
@@ -67,53 +78,115 @@ static void adc_calibration_init(void);
 static bool run_auto_calibration(void);
 static void run_multimeter_mode(void);
 static void run_sweep_mode(void);
-static void run_normal_operation(float setpoint_percent);
+//static void run_normal_operation(float setpoint_percent);
 
+/**
+ * @brief Executa o controlador PI Digital em Malha Fechada.
+ * @param target_voltage Setpoint desejado em VOLTS (ex: 1.0 para 1V).
+ */
+static void run_closed_loop_control(float target_voltage) {
+    // 1. Limita setpoint por segurança (0V a 3.1V)
+    if (target_voltage < 0.0f) target_voltage = 0.0f;
+    if (target_voltage > MAX_VOLTAGE_OUT) target_voltage = MAX_VOLTAGE_OUT;
+    
+    control_data_t current_data;
+    current_data.timestamp_amostra_ms = esp_timer_get_time() / 1000;
+    
+    int raw_value, current_voltage_mv = 0;
+    float current_voltage_v = 0.0f;
+
+    // 2. Leitura do Sensor (Feedback)
+    if (adc_oneshot_read(adc2_handle, SENSOR_ADC_CHANNEL, &raw_value) == ESP_OK) {
+        adc_cali_raw_to_voltage(adc2_cali_handle, raw_value, &current_voltage_mv);
+        current_data.valor_adc_raw = raw_value;
+        current_data.tensao_mv = (uint32_t)current_voltage_mv;
+        
+        // CONVERSÃO CRÍTICA: mV -> Volts para bater com o modelo matemático
+        current_voltage_v = current_voltage_mv / 1000.0f; 
+    } else {
+        current_data.valor_adc_raw = -1;
+        current_data.tensao_mv = 0;
+        current_voltage_v = 0.0f;
+    }
+
+    // 3. Cálculo do Erro
+    float error = target_voltage - current_voltage_v;
+
+    // 4. Equação de Diferenças do PI (u[k] = u[k-1] + q0*e[k] + q1*e[k-1])
+    float u = g_u_prev + (PI_Q0 * error) + (PI_Q1 * g_e_prev);
+
+    // 5. Saturação (Anti-windup) e Proteção
+    if (u > MAX_VOLTAGE_OUT) u = MAX_VOLTAGE_OUT;
+    if (u < 0.0f)            u = 0.0f;
+
+    // 6. Atuação na Planta (Conversão Volts -> Duty Cycle %)
+    // Se 3.1V é o máximo que o sistema "vê", assumimos isso como 100% de esforço
+    float duty_cycle_percent = (u / MAX_VOLTAGE_OUT) * 100.0f;
+    
+    // Clamp final de segurança do PWM
+    if (duty_cycle_percent > 100.0f) duty_cycle_percent = 100.0f;
+    
+    motor_set_duty_cycle(duty_cycle_percent);
+
+    // 7. Atualização dos Estados (Memória)
+    g_u_prev = u;
+    g_e_prev = error;
+
+    // 8. Telemetria
+    // Enviamos o duty cycle (%) para monitorar o esforço do motor
+    current_data.sinal_controle = duty_cycle_percent; 
+    
+    if (xQueueSend(data_queue, &current_data, 0) == pdTRUE) {
+        g_debug_samples_count++; 
+    }
+}
 
 void control_loop_task(void *pvParameter) {
     adc_calibration_init();
     motor_pwm_init();
-    ESP_LOGI(TAG, "Tarefa de Controle iniciada.");
+    ESP_LOGI(TAG, "Tarefa de Controle (Malha Fechada PI) iniciada.");
     
     TickType_t xLastWakeTime = xTaskGetTickCount();
-    float setpoint_percent = 0.0f;
+    float setpoint_value = 0.0f; // Agora representa VOLTS (se > 0)
     float last_setpoint = 0.0f;
 
     while(1) {
-        
+        // Leitura do Setpoint (Protegida por Mutex)
         if (xSemaphoreTake(g_setpoint_mutex, 0) == pdTRUE) {
-            setpoint_percent = g_current_setpoint;
+            setpoint_value = g_current_setpoint;
             xSemaphoreGive(g_setpoint_mutex);
         }
 
-        if (setpoint_percent != last_setpoint) {
-            ESP_LOGW(TAG, "Modo alterado para %.1f", setpoint_percent);
+        // --- DETECÇÃO DE MUDANÇA DE MODO/SETPOINT ---
+        if (setpoint_value != last_setpoint) {
+            ESP_LOGW(TAG, "Setpoint alterado para %.2f V", setpoint_value);
+            
+            // 1. Zera memória do controlador (PI) para evitar solavancos
+            g_u_prev = 0.0f;
+            g_e_prev = 0.0f;
+            
+            // 2. Reseta estados dos modos de teste (Multímetro/Sweep)
             g_calib_state = CALIB_STATE_IDLE;
             g_sweep_direction = SWEEP_DIR_UP;
             g_sweep_duty_cycle = 0.0f;
             
-            // --- RESET COMPLETO DO MULTÍMETRO ---
+            // 3. Reseta variáveis do Multímetro
             g_multimeter_max = 0;
-            memset(g_rolling_buffer, 0, sizeof(g_rolling_buffer)); // Limpa histórico
+            memset(g_rolling_buffer, 0, sizeof(g_rolling_buffer));
             g_rolling_idx = 0;
             g_temp_sec_max = 0;
-            g_last_roll_time = esp_timer_get_time(); // Reinicia cronômetro
-            // ------------------------------------
-            
-            last_setpoint = setpoint_percent;
+            g_last_roll_time = esp_timer_get_time();
+
+            last_setpoint = setpoint_value;
         }
 
-        // --- LÓGICA DE SEGURANÇA ---
-        // Só aplica timeout se estiver em modo NORMAL (positivo).
-        // Modos de teste (-1, -2, -3) ignoram a falta de rede.
-        if (setpoint_percent >= 0.0f) {
+        // --- LÓGICA DE SEGURANÇA (Watchdog) ---
+        if (setpoint_value >= 0.0f) {
             int64_t now = esp_timer_get_time() / 1000;
             if ((now - g_last_valid_communication_ms) > SAFETY_TIMEOUT_MS) {
-                if (setpoint_percent != 0.0f) {
-                    ESP_LOGE(TAG, "Failsafe ativado! Perda de comunicação. Parando motor.");
-                    setpoint_percent = 0.0f;
-                    
-                    // Atualiza a global para refletir que paramos
+                if (setpoint_value != 0.0f) {
+                    ESP_LOGE(TAG, "Failsafe! Sem rede há 5s. Zerando.");
+                    setpoint_value = 0.0f;
                     if (xSemaphoreTake(g_setpoint_mutex, 0) == pdTRUE) {
                         g_current_setpoint = 0.0f;
                         xSemaphoreGive(g_setpoint_mutex);
@@ -122,19 +195,22 @@ void control_loop_task(void *pvParameter) {
             }
         }
 
-        if (setpoint_percent == CALIBRATION_COMMAND) {
+        // --- SELETOR DE MODOS ---
+        if (setpoint_value == CALIBRATION_COMMAND) {
             if (run_auto_calibration()) {
                 if (xSemaphoreTake(g_setpoint_mutex, portMAX_DELAY) == pdTRUE) {
                     g_current_setpoint = 0.0f;
                     xSemaphoreGive(g_setpoint_mutex);
                 }
             }
-        } else if (setpoint_percent == MULTIMETER_COMMAND) {
+        } else if (setpoint_value == MULTIMETER_COMMAND) {
             run_multimeter_mode();
-        } else if (setpoint_percent == SWEEP_COMMAND) {
+        } else if (setpoint_value == SWEEP_COMMAND) {
             run_sweep_mode();
         } else {
-            run_normal_operation(setpoint_percent);
+            // MODO MALHA FECHADA
+            // O valor positivo agora é tratado como Tensão Alvo (Volts)
+            run_closed_loop_control(setpoint_value);
         }
         
         vTaskDelayUntil(&xLastWakeTime, pdMS_TO_TICKS(1000 / CONTROL_LOOP_FREQUENCY_HZ));
@@ -270,6 +346,7 @@ static void run_sweep_mode(void) {
     }
 }
 
+/*
 static void run_normal_operation(float setpoint_percent) {
     if (setpoint_percent < 0) setpoint_percent = 0;
     if (setpoint_percent > 100) setpoint_percent = 100;
@@ -293,6 +370,7 @@ static void run_normal_operation(float setpoint_percent) {
         g_debug_samples_count++; 
     }
 }
+*/
 
 static void motor_pwm_deinit(void) {
     if (timer) {
