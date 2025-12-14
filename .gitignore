@@ -8,7 +8,7 @@ sdkconfig
 sdkconfig.old
 
 # Arquivos de IDE (Específicos do usuário/máquina)
-.vscode/
+*.vscode/
 .idea/
 
 # Arquivos de Sistema

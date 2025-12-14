@@ -94,4 +94,4 @@ O sistema foi validado experimentalmente com os seguintes resultados para um deg
 Este projeto é de uso acadêmico/educacional.
 
 ---
-**Desenvolvido para a disciplina de Controle Digital.**
+**Desenvolvido para a disciplina de Sistemas de Controle I.**
