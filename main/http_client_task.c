@@ -12,7 +12,7 @@
 
 static const char *TAG = "HTTP_CLIENT_TASK";
 
-#define SERVER_URL "http://192.168.100.132:5000/data"//"http://10.123.120.209:5000/data"//
+#define SERVER_URL "http://192.168.100.160:5000/data"//"http://10.123.120.209:5000/data"//
 
 // Otimização: Batch size ajustado para baixa latência (40 amostras @ 200Hz = 200ms)
 #define BATCH_SIZE 50
