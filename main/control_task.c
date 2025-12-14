@@ -31,9 +31,21 @@ static const char *TAG = "CONTROL_TASK";
 // --- PARÂMETROS DO CONTROLADOR PI (Malha Fechada) ---
 // Planta: K=0.811, tau=0.135s | Ts=5ms
 // Método: Síntese Direta
-#define PI_Q0      2.422f
-#define PI_Q1     -2.334f
+#define M1_Q0   2.422f
+#define M1_Q1  -2.334f
+#define NAME_M1 "Sintese Direta (Suave)"
+
+// MÉTODO 2: Alocação de Polos (Agressivo, novo LGR)
+#define M2_Q0   18.9326f
+#define M2_Q1  -17.6657f
+#define NAME_M2 "Alocacao Polos (Agressivo)"
+
 #define MAX_VOLTAGE_OUT 3.1f // CORREÇÃO: Tensão de saturação do ADC do S3 (12dB)
+
+// --- Variáveis Globais de Controle (Agora são variáveis!) ---
+static float g_q0 = M1_Q0;  // Inicia com o Método 1
+static float g_q1 = M1_Q1;
+static int g_current_method = 1; // 1 ou 2
 
 // --- Variáveis de Estado do Controlador ---
 static float g_u_prev = 0.0f; // Ação de controle anterior (u[k-1])
@@ -43,6 +55,7 @@ static float g_e_prev = 0.0f; // Erro anterior (e[k-1])
 #define CALIBRATION_COMMAND -1.0f
 #define MULTIMETER_COMMAND  -2.0f
 #define SWEEP_COMMAND       -3.0f
+#define CMD_TOGGLE_CTRL     -4.0f
 
 #define SAFETY_TIMEOUT_MS 5000
 
@@ -113,7 +126,7 @@ static void run_closed_loop_control(float target_voltage) {
     float error = target_voltage - current_voltage_v;
 
     // 4. Equação de Diferenças do PI (u[k] = u[k-1] + q0*e[k] + q1*e[k-1])
-    float u = g_u_prev + (PI_Q0 * error) + (PI_Q1 * g_e_prev);
+    float u = g_u_prev + (g_q0 * error) + (g_q1 * g_e_prev);
 
     // 5. Saturação (Anti-windup) e Proteção
     if (u > MAX_VOLTAGE_OUT) u = MAX_VOLTAGE_OUT;
@@ -207,6 +220,36 @@ void control_loop_task(void *pvParameter) {
             run_multimeter_mode();
         } else if (setpoint_value == SWEEP_COMMAND) {
             run_sweep_mode();
+        } else if (setpoint_value == CMD_TOGGLE_CTRL) {
+            // --- LÓGICA DE TROCA DE CONTROLADOR ---
+            
+            motor_set_duty_cycle(0.0f); // Segurança: para o motor na troca
+            
+            if (g_current_method == 1) {
+                // Muda para o 2 (Agressivo)
+                g_q0 = M2_Q0;
+                g_q1 = M2_Q1;
+                g_current_method = 2;
+                ESP_LOGW(TAG, ">>> TROCA: %s ATIVADO <<<", NAME_M2);
+                ESP_LOGW(TAG, "Params: q0=%.3f, q1=%.3f", g_q0, g_q1);
+            } else {
+                // Muda para o 1 (Suave)
+                g_q0 = M1_Q0;
+                g_q1 = M1_Q1;
+                g_current_method = 1;
+                ESP_LOGW(TAG, ">>> TROCA: %s ATIVADO <<<", NAME_M1);
+                ESP_LOGW(TAG, "Params: q0=%.3f, q1=%.3f", g_q0, g_q1);
+            }
+
+            // Zera memória para evitar bump
+            g_u_prev = 0.0f;
+            g_e_prev = 0.0f;
+
+            // Retorna setpoint para 0 imediatamente para aguardar novo comando
+            if (xSemaphoreTake(g_setpoint_mutex, portMAX_DELAY) == pdTRUE) {
+                g_current_setpoint = 0.0f;
+                xSemaphoreGive(g_setpoint_mutex);
+            }
         } else {
             // MODO MALHA FECHADA
             // O valor positivo agora é tratado como Tensão Alvo (Volts)
