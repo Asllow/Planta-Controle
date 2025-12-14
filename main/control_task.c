@@ -346,32 +346,6 @@ static void run_sweep_mode(void) {
     }
 }
 
-/*
-static void run_normal_operation(float setpoint_percent) {
-    if (setpoint_percent < 0) setpoint_percent = 0;
-    if (setpoint_percent > 100) setpoint_percent = 100;
-    
-    control_data_t current_data;
-    current_data.sinal_controle = setpoint_percent;
-    motor_set_duty_cycle(current_data.sinal_controle);
-    current_data.timestamp_amostra_ms = esp_timer_get_time() / 1000;
-    
-    int raw_value, current_voltage_mv = 0;
-    if (adc_oneshot_read(adc2_handle, SENSOR_ADC_CHANNEL, &raw_value) == ESP_OK) {
-        current_data.valor_adc_raw = raw_value;
-        adc_cali_raw_to_voltage(adc2_cali_handle, raw_value, &current_voltage_mv);
-    } else {
-        current_data.valor_adc_raw = -1;
-    }
-
-    current_data.tensao_mv = (uint32_t)current_voltage_mv;
-    
-    if (xQueueSend(data_queue, &current_data, 0) == pdTRUE) {
-        g_debug_samples_count++; 
-    }
-}
-*/
-
 static void motor_pwm_deinit(void) {
     if (timer) {
         mcpwm_timer_start_stop(timer, MCPWM_TIMER_STOP_EMPTY);

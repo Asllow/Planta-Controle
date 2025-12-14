@@ -1,32 +1,97 @@
-# _Sample project_
+# Sistema de Controle Digital PI para Bancada de Motor DC
 
-(See the README.md file in the upper level 'examples' directory for more information about examples.)
+Este repositório contém o firmware para o microcontrolador ESP32-S3, responsável pelo controle de velocidade em malha fechada de um motor DC acoplado a um tacogerador. O projeto implementa um controlador PI Digital discreto com monitoramento via telemetria Wi-Fi.
 
-This is the simplest buildable example. The example is used by command `idf.py create-project`
-that copies the project to user specified path and set it's name. For more information follow the [docs page](https://docs.espressif.com/projects/esp-idf/en/latest/api-guides/build-system.html#start-a-new-project)
+## 📋 Funcionalidades
 
+### Controle
+- **Malha Fechada (PI Digital):** Implementação de controlador discretizado (ZOH, $T_s = 5ms$) com método de Síntese Direta.
+- **Anti-Windup:** Proteção contra saturação do integrador utilizando método de *Clamping*.
+- **Atuação:** PWM de alta resolução (1 kHz) via periférico MCPWM.
+- **Leitura:** Amostragem de tensão via ADC com calibração (esp_adc_cali).
 
+### Telemetria e Conectividade
+- **Wi-Fi Station:** Conexão automática com reconexão resiliente.
+- **HTTP Client Otimizado:** Envio de dados em *batch* (lotes) com conexão persistente (*Keep-Alive*) para alta vazão e baixa latência.
+- **Protocolo:** JSON contendo Timestamp, Tensão (mV), ADC Raw e Sinal de Controle (%).
 
-## How to use example
-We encourage the users to use the example as a template for the new projects.
-A recommended way is to follow the instructions on a [docs page](https://docs.espressif.com/projects/esp-idf/en/latest/api-guides/build-system.html#start-a-new-project).
+### Segurança e Diagnóstico
+- **Failsafe (Watchdog):** Desligamento automático do motor em caso de perda de comunicação (> 5s).
+- **Modos de Teste:**
+    - **Multímetro:** Leitura de tensão com *Peak Hold*.
+    - **Varredura (Sweep):** Rampa automática 0-100% para identificação de sistemas.
+    - **Calibração:** Rotina automática para detecção de fundo de escala.
 
-## Example folder contents
+## 🛠️ Hardware Necessário
 
-The project **sample_project** contains one source file in C language [main.c](main/main.c). The file is located in folder [main](main).
+- **MCU:** ESP32-S3 (DevKit).
+- **Driver de Motor:** Ponte H ou Driver PWM compatível (3.3V Logic).
+- **Sensor:** Tacogerador (Saída analógica 0-3.1V condicionada).
+- **Fonte de Alimentação:** Adequada para o motor DC utilizado.
 
-ESP-IDF projects are built using CMake. The project build configuration is contained in `CMakeLists.txt`
-files that provide set of directives and instructions describing the project's source files and targets
-(executable, library, or both). 
+### Pinout (Configuração Padrão)
 
-Below is short explanation of remaining files in the project folder.
+| Periférico | Pino ESP32 | Função |
+|------------|------------|--------|
+| Motor PWM  | GPIO 21    | Sinal de Controle (Gate Driver) |
+| Tacogerador| GPIO 13    | Entrada Analógica (ADC2_CH2) |
+
+*(Nota: Verifique `control_task.c` para confirmar as definições `MOTOR_PWM_PIN` e canais ADC)*
+
+## 🚀 Como Compilar e Rodar
+
+Este projeto utiliza o **ESP-IDF** (Espressif IoT Development Framework).
+
+### Pré-requisitos
+- ESP-IDF v5.0 ou superior instalado.
+- Compilador Xtensa (para ESP32/S3).
+
+### Passos
+1. **Clonar o repositório:**
+   ```bash
+   git clone [https://github.com/seu-usuario/planta-controle.git](https://github.com/seu-usuario/planta-controle.git)
+   cd planta-controle
+   ```
+
+2. **Configurar o Alvo:**
+   ```bash
+   idf.py set-target esp32s3
+   ```
+
+3. **Configurar Wi-Fi e Parâmetros:**
+   Abra o `menuconfig` para definir SSID/Senha ou edite diretamente em `main.c` / `wifi_manager.c` (não recomendado para produção).
+   ```bash
+   idf.py menuconfig
+   ```
+   *Navegue até: Component config > FreeRTOS > Tick Rate (Hz) e garanta que está em 1000Hz.*
+
+4. **Compilar e Flash:**
+   ```bash
+   idf.py build flash monitor
+   ```
+
+## 📊 Estrutura do Projeto
 
 ```
-├── CMakeLists.txt
-├── main
-│   ├── CMakeLists.txt
-│   └── main.c
-└── README.md                  This is the file you are currently reading
+main/
+├── control_task.c      # Loop de controle (200Hz), PID e Modos de Teste
+├── http_client_task.c  # Gerenciamento de envio de dados (JSON/HTTP)
+├── wifi_manager.c      # Máquina de estados da conexão Wi-Fi
+├── main.c              # Inicialização do sistema e criação das tasks
+└── shared_resources.h  # Filas (Queues), Semáforos e Definições Globais
 ```
-Additionally, the sample project contains Makefile and component.mk files, used for the legacy Make based build system. 
-They are not used or needed when building with CMake and idf.py.
+
+## 📈 Desempenho do Controlador
+
+O sistema foi validado experimentalmente com os seguintes resultados para um degrau de 1.0V -> 1.5V:
+
+- **Tempo de Subida ($t_r$):** ~270 ms
+- **Tempo de Acomodação ($t_s$ 5%):** ~365 ms
+- **Sobressinal:** < 4.1%
+
+## 📝 Licença
+
+Este projeto é de uso acadêmico/educacional.
+
+---
+**Desenvolvido para a disciplina de Controle Digital.**

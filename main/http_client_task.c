@@ -14,8 +14,7 @@ static const char *TAG = "HTTP_CLIENT_TASK";
 
 #define SERVER_URL "http://192.168.100.132:5000/data"//"http://10.123.120.209:5000/data"//
 
-// AGORA PODEMOS REDUZIR! 
-// 40 amostras a 200Hz = 0.2 segundos de delay visual (Muito rápido)
+// Otimização: Batch size ajustado para baixa latência (40 amostras @ 200Hz = 200ms)
 #define BATCH_SIZE 50
 
 typedef struct {
@@ -53,7 +52,7 @@ void communication_task(void *pvParameter) {
         .event_handler = _http_event_handler,
         .user_data = &response_data,
         .timeout_ms = 2000,
-        .keep_alive_enable = true, // Mantém a conexão aberta!
+        .keep_alive_enable = true, // Mantém a conexão aberta
     };
     
     // Cria o cliente uma única vez
@@ -102,7 +101,6 @@ void communication_task(void *pvParameter) {
                 if (err == ESP_OK) {
                     g_debug_batches_sent++;
                     
-                    // Sucesso na comunicação = Watchdog feliz
                     g_last_valid_communication_ms = esp_timer_get_time() / 1000;
 
                     if (response_data.buffer_len > 0) {
@@ -134,12 +132,9 @@ void communication_task(void *pvParameter) {
                     }
                 }
                 
-                // IMPORTANTE: NÃO FAZEMOS CLEANUP AQUI!
-                // Apenas liberamos a memória do JSON
                 free(json_payload);
             }
         }
     }
-    // Cleanup só se sair do loop (o que nunca acontece)
     esp_http_client_cleanup(client);
 }

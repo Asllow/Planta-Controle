@@ -1,3 +1,20 @@
+# Compilação e Binários
 build/
+managed_components/
+dependencies.lock
+
+# Configurações do SDK (Geralmente locais)
 sdkconfig
 sdkconfig.old
+
+# Arquivos de IDE (Específicos do usuário/máquina)
+.vscode/
+.idea/
+
+# Arquivos de Sistema
+.DS_Store
+Thumbs.db
+
+# Python cache (Se houver scripts)
+__pycache__/
+*.pyc
