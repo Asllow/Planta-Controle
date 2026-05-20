@@ -26,7 +26,7 @@ void app_main(void)
     ESP_LOGI(TAG, "Iniciando Planta de Controle - Modo Simplificado.");
 
     // 1. Criação de Recursos (Fila e Mutex)
-    data_queue = xQueueCreate(1000, sizeof(control_data_t));
+    data_queue = xQueueCreate(3000, sizeof(control_data_t));
     g_setpoint_mutex = xSemaphoreCreateMutex();
     g_last_valid_communication_ms = esp_timer_get_time() / 1000;
 

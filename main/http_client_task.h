@@ -1,6 +1,6 @@
-#ifndef HTTP_CLIENT_TASK_H
-#define HTTP_CLIENT_TASK_H
+#ifndef WEBSOCKET_TASK_H
+#define WEBSOCKET_TASK_H
 
 void communication_task(void *pvParameter);
 
-#endif // HTTP_CLIENT_TASK_H
+#endif // WEBSOCKET_TASK_H

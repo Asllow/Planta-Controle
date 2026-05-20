@@ -8,6 +8,8 @@
 #include "freertos/semphr.h"
 #include <stdint.h>
 
+#define ENABLE_OBSERVER_DEBUG
+
 /**
  * @brief Estrutura para passar os dados de controle do Core 0 (controle) para o Core 1 (comunicação).
  * * Esta estrutura contém um pacote completo de dados coletados em um único ciclo de controle.
@@ -17,6 +19,10 @@ typedef struct {
     int valor_adc_raw;            // O valor bruto lido do ADC (ex: 0-4095).
     uint32_t tensao_mv;           // A tensão calculada em milivolts, após calibração.
     float sinal_controle;         // O sinal de controle calculado e aplicado ao motor (%).
+#ifdef ENABLE_OBSERVER_DEBUG
+    float tensao_estimada_mv;
+    float erro_obs_mv;
+#endif
 } control_data_t;
 
 
