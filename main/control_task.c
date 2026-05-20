@@ -1,5 +1,5 @@
 #include <stdio.h>
-#include <math.h> // Para fmaxf, fminf e fabs
+#include <math.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "driver/ledc.h"
@@ -21,31 +21,28 @@
 #define ADC_UNIT            ADC_UNIT_2
 #define ADC_CHANNEL         ADC_CHANNEL_2
 
-// -------------------------------------------------------------
-// CONSTANTES DO MODELO E CONTROLE (A, B, C, K, L)
-// Calculadas para Ts = 1ms
-// -------------------------------------------------------------
-const float A_11 = 0.0982f,   A_12 = 1.0f;
-const float A_21 = -0.7868f,  A_22 = 0.0f;
+// =============================================================
+// CONSTANTES DO MODELO E GANHOS (Ts = 10ms)
+// =============================================================
+const float A_11 =  1.6075f, A_12 = 1.0f;
+const float A_21 = -0.6372f, A_22 = 0.0f;
 
-const float B_1 = -0.7875f;
-const float B_2 = 36.9610f;
+const float B_1 =  0.9066f;  
+const float B_2 = -0.6093f;  
 
-const float C_1 = 1.0f, C_2 = 0.0f; // C = [1 0]
+const float C_1 = 1.0f;
+const float C_2 = 0.0f;
 
-// Ganhos do Controlador (K e ka)
-const float K_1 = -0.2285f;
-const float K_2 =  0.0385f;
-const float k_a =  0.0006f; 
+const float L_1 =  0.7575f;
+const float L_2 = -0.4572f;
 
-// Ganhos do Observador de Luenberger (L)
-const float L_1 = -0.9018f;
-const float L_2 = -1.0368f;
+const float K_1 =  0.6966f;
+const float K_2 =  0.6138f;
+const float K_i = -0.0333f;
 
-// Ponto de operação DC (Detrend)
-const float Y_EQ = 1598.75f; // Ponto de equilibrio de malha aberta (mV)
-
-// -------------------------------------------------------------
+const float PWM_EQ = 50.0f;
+const float Y_EQ   = 1600.0f; 
+// =============================================================
 
 extern QueueHandle_t data_queue;
 extern SemaphoreHandle_t g_setpoint_mutex;
@@ -102,120 +99,112 @@ static void adc_init(void){
     }
 }
 
-// -------------------------------------------------------------
-// TAREFA PRINCIPAL DO LOOP DE CONTROLE (1 ms)
-// -------------------------------------------------------------
+// =============================================================
+// TAREFA PRINCIPAL DO LOOP DE CONTROLE (Ts = 10 ms)
+// =============================================================
 void control_loop_task(void *pvParameters){
     ledc_init();
     adc_init();
 
-    // Estados do Controlador/Observador (k)
     float x_hat_1 = 0.0f;
     float x_hat_2 = 0.0f;
-    float x_int   = 0.0f; // Memória do integrador
+    float erro_integral = 0.0f;
+    
+    bool controle_ativo_anterior = false;
 
     TickType_t last_wake_time = xTaskGetTickCount();
 
     while(1){
-        // 1. OBTER REFERÊNCIA (IHM - Valor Livre Digitado)
+        // 1. OBTER REFERÊNCIA (IHM)
         float valor_digitado = 0.0f;
         if (xSemaphoreTake(g_setpoint_mutex, 0) == pdTRUE) {
             valor_digitado = g_current_setpoint; 
             xSemaphoreGive(g_setpoint_mutex);
         }
 
-        // --- TRATAMENTO DO VALOR DA IHM ---
-        // Garante que o valor digitado fique dentro de 0% e 100%
-        if (valor_digitado > 100.0f) {
-            valor_digitado = 100.0f;
-        } else if (valor_digitado < 0.0f) {
-            valor_digitado = 0.0f;
-        }
+        // --- TRATAMENTO DO VALOR DA IHM DIRETO EM mV ---
+        float current_setpoint_mV_absoluto = valor_digitado; 
+        
+        // Limita o alvo para não queimar nada
+        if(current_setpoint_mV_absoluto > 3100.0f) current_setpoint_mV_absoluto = 3100.0f;
+        
+        float current_setpoint_mV_delta = current_setpoint_mV_absoluto - Y_EQ;
 
-        // Traduz de Porcentagem para Milivolts (mV). 
-        const float MAX_TENSAO_MV = 3100.0f; 
-        float current_setpoint_mV = (valor_digitado / 100.0f) * MAX_TENSAO_MV;
+        // O controle só liga se você digitar mais de 500mV.
+        bool controle_ativo = (current_setpoint_mV_absoluto > 500.0f);
 
-        // Controle só ativa se o usuário pedir mais de 1%
-        bool controle_ativo = (valor_digitado > 1.0f);
-
-        // 2. LER SENSOR E RETIRAR PONTO DE OPERAÇÃO
+        // 2. LER SENSOR 
         int adc_raw = 0;
         int voltage_mV = 0;
         ESP_ERROR_CHECK(adc_oneshot_read(adc_handle, ADC_CHANNEL, &adc_raw));
         if (do_calibration) {
             adc_cali_raw_to_voltage(adc_cali_handle, adc_raw, &voltage_mV);
         }
+        
+        float y_medido_delta = (float)voltage_mV - Y_EQ;
 
-        float y_medido = (float)voltage_mV;
-        float delta_y = y_medido - Y_EQ;      
-        float delta_ref = current_setpoint_mV - Y_EQ; 
-
-        float erro = 0.0f;
-        float delta_u_total = 0.0f; 
-
-        // 3. LEI DE CONTROLE (Realimentação de Estados Estimados + Integrador)
-        if (controle_ativo) {
-            erro = delta_ref - delta_y;
-            
-            // u_estado = -K * x_hat
-            float u_estado = -(K_1 * x_hat_1 + K_2 * x_hat_2);
-            
-            // u_int = ka * x_int
-            float u_int = k_a * x_int;
-            
-            delta_u_total = u_estado + u_int;
-        } else {
-            delta_u_total = 0.0f;
-            x_int = 0.0f; // Reseta o integrador se desligado
+        // PULO DO GATO: Reset limpo ao iniciar o controle
+        if (controle_ativo && !controle_ativo_anterior) {
+            x_hat_1 = 0.0f;
+            x_hat_2 = 0.0f;
+            erro_integral = 0.0f;
         }
+        controle_ativo_anterior = controle_ativo;
 
-        // Saturar o delta_u em limites físicos de variação (Ex: +/- 50% de banda de PWM)
-        float u_sat = fmaxf(-50.0f, fminf(50.0f, delta_u_total));
+        // 3. CÁLCULO DA LEI DE CONTROLE PI 
+        float pwm_saturado = 0.0f;
+        float delta_u_aplicado = 0.0f; 
 
-        // 4. ATUALIZAR O INTEGRAL COM ANTI-WINDUP
         if (controle_ativo) {
-            // Só acumula o erro se não estiver saturado
-            if (fabs(delta_u_total) <= 50.0f) {
-                x_int += erro;
+            float erro = current_setpoint_mV_delta - y_medido_delta;
+
+            // A) Qual seria o PWM agora ANTES de integrar o erro atual?
+            float delta_u_prop = - (K_1 * x_hat_1 + K_2 * x_hat_2);
+            float pwm_tentativa = PWM_EQ + delta_u_prop - (K_i * erro_integral);
+
+            // B) Lógica ANTI-WINDUP INDUSTRIAL (Perfeita, sem travas matemáticas artificiais)
+            bool pode_integrar = true;
+            if (pwm_tentativa >= 100.0f && erro > 0.0f) pode_integrar = false; 
+            if (pwm_tentativa <= 38.0f && erro < 0.0f) pode_integrar = false;  
+
+            if (pode_integrar) {
+                erro_integral += erro;
             }
+            // O LIMITADOR MATEMÁTICO QUE CAUSOU O PROBLEMA FOI REMOVIDO DAQUI!
+
+            // C) Recalcula a Lei de Controle FINAL 
+            float delta_u_final = delta_u_prop - (K_i * erro_integral);
+            float pwm_total = PWM_EQ + delta_u_final;
+            
+            // D) Saturação Física e envio para a planta
+            pwm_saturado = fmaxf(38.0f, fminf(100.0f, pwm_total));
+            delta_u_aplicado = pwm_saturado - PWM_EQ;
+            
+        } else {
+            // Motor desligado
+            pwm_saturado = 0.0f;
+            delta_u_aplicado = 0.0f - PWM_EQ; 
         }
 
-        // 5. ATUALIZAR O OBSERVADOR (Estimativa para k+1)
-        float y_hat = x_hat_1; // Porque C = [1 0]
-        float erro_obs = delta_y - y_hat;
+        // 5. OBSERVADOR DE LUENBERGER 
+        float y_hat_delta = (C_1 * x_hat_1) + (C_2 * x_hat_2); 
+        float erro_obs = y_medido_delta - y_hat_delta;
 
-        float x_hat_1_novo = (A_11 * x_hat_1) + (A_12 * x_hat_2) + (B_1 * u_sat) + (L_1 * erro_obs);
-        float x_hat_2_novo = (A_21 * x_hat_1) + (A_22 * x_hat_2) + (B_2 * u_sat) + (L_2 * erro_obs);
+        float x_hat_1_novo = (A_11 * x_hat_1) + (A_12 * x_hat_2) + (B_1 * delta_u_aplicado) + (L_1 * erro_obs);
+        float x_hat_2_novo = (A_21 * x_hat_1) + (A_22 * x_hat_2) + (B_2 * delta_u_aplicado) + (L_2 * erro_obs);
 
         x_hat_1 = x_hat_1_novo;
         x_hat_2 = x_hat_2_novo;
 
-        // 6. TRADUZIR O ESFORÇO DE CONTROLE (u_sat) PARA O MUNDO REAL DA PLANTA (PWM)
-        float effective_setpoint = 0.0f;
-        
-        if (controle_ativo) {
-            // O u_sat é variação. Voltamos a adicionar os 50% do ponto de equilíbrio DC.
-            float u_real_pwm = u_sat + 50.0f; 
-            
-            // Garante que a saída final não passe de 100% nem caia de 0%
-            effective_setpoint = fmaxf(0.0f, fminf(100.0f, u_real_pwm));
+        // 6. ENVIAR PARA O MOTOR (PWM FÍSICO)
+        float effective_setpoint = pwm_saturado;
 
-            // Aplica a zona morta exigida pelo hardware (se pediu pra rodar, mínimo é 38%)
-            if (effective_setpoint < 38.0f) {
-                effective_setpoint = 38.0f; 
-            }
-        } else {
-            effective_setpoint = 0.0f;
-        }
-
-        // 7. APLICAR PWM
         uint32_t target_duty = (uint32_t)((effective_setpoint / 100.0f) * 8191.0f);
         LEDC_DUTY = target_duty;
         ESP_ERROR_CHECK(ledc_set_duty(LEDC_MODE, LEDC_CHANNEL, LEDC_DUTY));
         ESP_ERROR_CHECK(ledc_update_duty(LEDC_MODE, LEDC_CHANNEL));
 
-        // 8. ENVIAR DADOS (Para Log/Gráfico IHM)
+        // 7. PREPARAR PACOTE DA IHM
         control_data_t data;
         data.timestamp_amostra_ms = esp_timer_get_time() / 1000;
         data.valor_adc_raw = adc_raw;
@@ -223,12 +212,13 @@ void control_loop_task(void *pvParameters){
         data.sinal_controle = effective_setpoint;
 
 #ifdef ENABLE_OBSERVER_DEBUG
-        data.tensao_estimada_mv = y_hat + Y_EQ; 
+        // Transforma o estado delta para o mundo absoluto para a interface web
+        data.tensao_estimada_mv = y_hat_delta + Y_EQ; 
         data.erro_obs_mv = erro_obs; 
 #endif
 
         xQueueSend(data_queue, &data, 0);
 
-        vTaskDelayUntil(&last_wake_time, pdMS_TO_TICKS(1));
+        vTaskDelayUntil(&last_wake_time, pdMS_TO_TICKS(10));
     }
 }

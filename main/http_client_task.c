@@ -12,6 +12,7 @@ static const char *TAG = "WEBSOCKET_TASK";
 
 #define SERVER_WS_URL "ws://192.168.137.1:5000/ws" 
 #define BATCH_SIZE 250 
+#define CHUNK_SIZE 25 // O segredo: Enviamos JSONs perfeitos de 25 em 25!
 
 static void _websocket_event_handler(void *handler_args, esp_event_base_t base, int32_t event_id, void *event_data) {
     esp_websocket_event_data_t *data = (esp_websocket_event_data_t *)event_data;
@@ -60,8 +61,11 @@ static void _websocket_event_handler(void *handler_args, esp_event_base_t base, 
 void communication_task(void *pvParameter) {
     ESP_LOGI(TAG, "Tarefa de Comunicacao SINCRONIZADA iniciada.");
 
+    // Aloca a memória para retirar rapidamente 250 itens da fila (protegendo o loop de 1ms)
     control_data_t *sample_buffer = malloc(BATCH_SIZE * sizeof(control_data_t));
-    int max_len = BATCH_SIZE * 180 + 100;
+    
+    // O Buffer do JSON agora é pequeno! Só precisa caber 25 amostras (25 * 180 + 100 = ~4600 bytes)
+    int max_len = CHUNK_SIZE * 180 + 100;
     char *json_payload = malloc(max_len);
 
     if (sample_buffer == NULL || json_payload == NULL) {
@@ -71,7 +75,8 @@ void communication_task(void *pvParameter) {
 
     esp_websocket_client_config_t websocket_cfg = {
         .uri = SERVER_WS_URL,
-        .buffer_size = max_len + 512,
+        // Mantemos um buffer interno seguro e folgado de 6KB para o ESP32 não travar
+        .buffer_size = 6144, 
         .reconnect_timeout_ms = 5000,
         .network_timeout_ms = 5000
     };
@@ -83,6 +88,7 @@ void communication_task(void *pvParameter) {
     while(1) {
         int num_samples = 0;
         
+        // 1. ESVAZIA A FILA RAPIDAMENTE (Até 250 amostras)
         if (xQueueReceive(data_queue, &sample_buffer[num_samples], portMAX_DELAY) == pdPASS) {
             num_samples++;
             
@@ -94,37 +100,54 @@ void communication_task(void *pvParameter) {
                 }
             }
 
+            // 2. ENVIA OS DADOS EM "SUB-LOTES" DE 25 JSONs COMPLETOS
             if (esp_websocket_client_is_connected(client)) {
-                int offset = 0;
-                offset += snprintf(json_payload + offset, max_len - offset, "[");
+                int samples_sent = 0;
                 
-                for (int i = 0; i < num_samples; i++) {
+                while (samples_sent < num_samples) {
+                    int current_chunk_size = num_samples - samples_sent;
+                    if (current_chunk_size > CHUNK_SIZE) {
+                        current_chunk_size = CHUNK_SIZE;
+                    }
+
+                    int offset = 0;
+                    offset += snprintf(json_payload + offset, max_len - offset, "[");
+                    
+                    for (int i = 0; i < current_chunk_size; i++) {
+                        int idx = samples_sent + i;
+                        
 #ifdef ENABLE_OBSERVER_DEBUG
-                    offset += snprintf(json_payload + offset, max_len - offset, 
-                        "{\"timestamp_amostra_ms\":%.0f,\"valor_adc\":%d,\"tensao_mv\":%.2f,\"sinal_controle\":%.2f,\"tensao_estimada_mv\":%.2f,\"erro_obs_mv\":%.2f}%s",
-                        (double)sample_buffer[i].timestamp_amostra_ms,
-                        (int)sample_buffer[i].valor_adc_raw,
-                        (float)sample_buffer[i].tensao_mv,
-                        (float)sample_buffer[i].sinal_controle,
-                        (float)sample_buffer[i].tensao_estimada_mv,
-                        (float)sample_buffer[i].erro_obs_mv,
-                        (i == num_samples - 1) ? "" : ","
-                    );
+                        offset += snprintf(json_payload + offset, max_len - offset, 
+                            "{\"timestamp_amostra_ms\":%.0f,\"valor_adc\":%d,\"tensao_mv\":%.2f,\"sinal_controle\":%.2f,\"tensao_estimada_mv\":%.2f,\"erro_obs_mv\":%.2f}%s",
+                            (double)sample_buffer[idx].timestamp_amostra_ms,
+                            (int)sample_buffer[idx].valor_adc_raw,
+                            (float)sample_buffer[idx].tensao_mv,
+                            (float)sample_buffer[idx].sinal_controle,
+                            (float)sample_buffer[idx].tensao_estimada_mv,
+                            (float)sample_buffer[idx].erro_obs_mv,
+                            (i == current_chunk_size - 1) ? "" : ","
+                        );
 #else
-                    offset += snprintf(json_payload + offset, max_len - offset, 
-                        "{\"timestamp_amostra_ms\":%.0f,\"valor_adc\":%d,\"tensao_mv\":%.2f,\"sinal_controle\":%.2f}%s",
-                        (double)sample_buffer[i].timestamp_amostra_ms,
-                        (int)sample_buffer[i].valor_adc_raw,
-                        (float)sample_buffer[i].tensao_mv,
-                        (float)sample_buffer[i].sinal_controle,
-                        (i == num_samples - 1) ? "" : ","
-                    );
+                        offset += snprintf(json_payload + offset, max_len - offset, 
+                            "{\"timestamp_amostra_ms\":%.0f,\"valor_adc\":%d,\"tensao_mv\":%.2f,\"sinal_controle\":%.2f}%s",
+                            (double)sample_buffer[idx].timestamp_amostra_ms,
+                            (int)sample_buffer[idx].valor_adc_raw,
+                            (float)sample_buffer[idx].tensao_mv,
+                            (float)sample_buffer[idx].sinal_controle,
+                            (i == current_chunk_size - 1) ? "" : ","
+                        );
 #endif
+                    }
+                    
+                    snprintf(json_payload + offset, max_len - offset, "]");
+
+                    // Como esse JSON tem menos de 5KB, ele cabe certinho no buffer de 6KB
+                    // e o ESP envia de uma vez, sem quebrar! O Python vai amar ler isso.
+                    esp_websocket_client_send_text(client, json_payload, strlen(json_payload), portMAX_DELAY);
+                    
+                    samples_sent += current_chunk_size;
                 }
                 
-                snprintf(json_payload + offset, max_len - offset, "]");
-
-                esp_websocket_client_send_text(client, json_payload, strlen(json_payload), portMAX_DELAY);
                 g_last_valid_communication_ms = esp_timer_get_time() / 1000;
                 
             } else {
