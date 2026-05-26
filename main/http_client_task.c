@@ -65,7 +65,7 @@ void communication_task(void *pvParameter) {
     control_data_t *sample_buffer = malloc(BATCH_SIZE * sizeof(control_data_t));
     
     // O Buffer do JSON agora é pequeno! Só precisa caber 25 amostras (25 * 180 + 100 = ~4600 bytes)
-    int max_len = CHUNK_SIZE * 180 + 100;
+    int max_len = CHUNK_SIZE * 250 + 100;
     char *json_payload = malloc(max_len);
 
     if (sample_buffer == NULL || json_payload == NULL) {
@@ -118,13 +118,16 @@ void communication_task(void *pvParameter) {
                         
 #ifdef ENABLE_OBSERVER_DEBUG
                         offset += snprintf(json_payload + offset, max_len - offset, 
-                            "{\"timestamp_amostra_ms\":%.0f,\"valor_adc\":%d,\"tensao_mv\":%.2f,\"sinal_controle\":%.2f,\"tensao_estimada_mv\":%.2f,\"erro_obs_mv\":%.2f}%s",
+                            "{\"timestamp_amostra_ms\":%.0f,\"valor_adc\":%d,\"tensao_mv\":%.2f,\"sinal_controle\":%.2f,\"tensao_estimada_mv\":%.2f,\"erro_obs_mv\":%.2f,\"estado_1\":%.4f,\"estado_2\":%.4f,\"estado_3\":%.4f}%s",
                             (double)sample_buffer[idx].timestamp_amostra_ms,
                             (int)sample_buffer[idx].valor_adc_raw,
                             (float)sample_buffer[idx].tensao_mv,
                             (float)sample_buffer[idx].sinal_controle,
                             (float)sample_buffer[idx].tensao_estimada_mv,
                             (float)sample_buffer[idx].erro_obs_mv,
+                            (float)sample_buffer[idx].estado_1,
+                            (float)sample_buffer[idx].estado_2,
+                            (float)sample_buffer[idx].estado_3,
                             (i == current_chunk_size - 1) ? "" : ","
                         );
 #else

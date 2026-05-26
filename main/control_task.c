@@ -197,6 +197,9 @@ void control_loop_task(void *pvParameters){
 #ifdef ENABLE_OBSERVER_DEBUG
         data.tensao_estimada_mv = (y_hat + Y_EQ) * 1000.0f;
         data.erro_obs_mv = erro_obs * 1000.0f;
+        data.estado_1 = x1_hat;
+        data.estado_2 = x2_hat;
+        data.estado_3 = x3_hat;
 #endif
 
         // Envio para a Fila (Core 1 processará o envio via WebSocket)
