@@ -155,7 +155,6 @@ void control_loop_task(void *pvParameters){
             if (x_integral > 3.0f) x_integral = 3.0f;
             if (x_integral < -3.0f) x_integral = -3.0f;
 
-            // Lei de Controle de Realimentação de Estados
             float ux = K1*novo_x1 + K2*novo_x2 + K3*novo_x3;
             u_control_desvio = -ux + Ki * x_integral;
             
