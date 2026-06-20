@@ -1,8 +1,8 @@
 /**
  * @file ipc_manager.h
  * @brief Gestor de Comunicação Inter-Processos (IPC).
- * * Abstrai as filas (Queues) e semáforos (Mutexes) do FreeRTOS, fornecendo
- * uma interface segura para a troca de dados entre os núcleos do processador.
+ * * Abstrai as filas e semáforos do FreeRTOS, fornecendo
+ * uma interface segura para a troca de dados entre núcleos.
  */
 
 #ifndef IPC_MANAGER_H
@@ -13,12 +13,14 @@
 
 /**
  * @brief Estrutura unificada de telemetria e estado do observador.
+ * * Estruturada para envio binário direto (Little-Endian, 36 bytes).
+ * O atributo 'packed' impede a inserção de bytes de alinhamento pelo compilador.
  */
-typedef struct {
-    int64_t timestamp_amostra_ms;
-    int valor_adc_raw;
-    uint32_t tensao_mv;
+typedef struct __attribute__((packed)) {
+    uint32_t timestamp_amostra_ms;
     float sinal_controle;
+    float tensao_mv;
+    float valor_adc;
     float tensao_estimada_mv;
     float erro_obs_mv;
     float estado_1;

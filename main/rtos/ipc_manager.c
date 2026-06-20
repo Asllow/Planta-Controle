@@ -13,6 +13,16 @@ static const char *TAG = "IPC_MGR";
 
 #define TELEMETRY_QUEUE_SIZE 3000
 
+#define Ra1  4.476656
+#define La1  0.013590
+#define ke1  0.319541
+#define Ra2  2.793557
+#define La2  0.004421
+#define ke2  0.169322
+#define Jeq  0.000365
+#define Beq  0.000518
+#define RL   180.0
+
 static QueueHandle_t s_telemetry_queue = NULL;
 static SemaphoreHandle_t s_setpoint_mutex = NULL;
 static float s_current_setpoint = 0.0f;
@@ -56,4 +66,11 @@ bool IPC_MGR_EnqueueTelemetry(const control_data_t *data) {
 bool IPC_MGR_DequeueTelemetry(control_data_t *data, uint32_t timeout_ms) {
     if (s_telemetry_queue == NULL) return false;
     return (xQueueReceive(s_telemetry_queue, data, pdMS_TO_TICKS(timeout_ms)) == pdTRUE);
+}
+
+float IPC_MGR_DesiredReference(float current_setpoint) {
+    float i2_desired_reference_x3 = current_setpoint/RL;
+    float w_desired_reference_x1 = ((Ra2+RL) / ke2) * i2_desired_reference_x3;
+    float i1_desired_reference_x2 = ((Beq * w_desired_reference_x1) + (ke2 * i2_desired_reference_x3)) / ke1;
+    return w_desired_reference_x1, i1_desired_reference_x2, i2_desired_reference_x3;
 }
