@@ -1,63 +1,77 @@
+/**
+ * @file main.c
+ * @brief Ponto de entrada da aplicação. Orquestra a inicialização de subsistemas
+ * e o escalonamento das tarefas no FreeRTOS.
+ */
+
 #include <stdio.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_log.h"
-#include "shared_resources.h"
-#include "wifi_manager.h"
 #include "esp_timer.h"
+
+/* Inclusões da Nova Arquitetura */
+#include "wifi_manager.h"
+#include "udp_comms_task.h"
+#include "ipc_manager.h"
 #include "control_task.h"
-#include "http_client_task.h"
 
-QueueHandle_t data_queue;
-SemaphoreHandle_t g_setpoint_mutex;
-
-#define WIFI_SSID       "Rede_Planta"
-#define WIFI_PASSWORD   "Rede_Planta"
+/* Credenciais do Ponto de Acesso (SoftAP) */
+#define APP_MAIN_WIFI_SSID       "Planta_Controle_AP"
+#define APP_MAIN_WIFI_PASSWORD   "12345678"
 
 static const char *TAG = "APP_MAIN";
 
-// Mantemos apenas as variáveis globais essenciais para o controle/comunicação
-volatile float g_current_setpoint = 0.0f;
-volatile float g_sensor_max_voltage_mv = 3100.0f;
-volatile int64_t g_last_valid_communication_ms = 0;
-
 void app_main(void)
 {
-    ESP_LOGI(TAG, "Iniciando Planta de Controle - Modo Simplificado.");
+    ESP_LOGI(TAG, "Inicializando Planta de Controlo - Arquitetura HAL/IPC");
 
-    // 1. Criação de Recursos (Fila e Mutex)
-    data_queue = xQueueCreate(3000, sizeof(control_data_t));
-    g_setpoint_mutex = xSemaphoreCreateMutex();
-    g_last_valid_communication_ms = esp_timer_get_time() / 1000;
-
-    if(data_queue == NULL || g_setpoint_mutex == NULL){
-        ESP_LOGE(TAG, "Falha crítica na criação de recursos.");
+    /* 1. Inicialização do Gestor de Comunicação Inter-Processos (IPC) */
+    if (!IPC_MGR_Init()) {
+        ESP_LOGE(TAG, "Falha critica na alocacao de recursos IPC. Sistema abortado.");
         return;
     }
 
-    // 2. Tarefa de Controle (Core 0 - Tempo Real)
-    // Aqui roda a malha aberta, leitura do tacogerador e PWM
+    /* 2. Tarefa de Controlo de Tempo Real (Fixo no Core 0 para determinismo) */
     xTaskCreatePinnedToCore(
-                    control_loop_task,   
-                    "Tarefa de Controle",
-                    4096,                
-                    NULL,                
-                    10,                  
-                    NULL,                
-                    0);                  
+        control_loop_task,   
+        "Tarefa_Controlo",
+        4096,                
+        NULL,                
+        10,                  
+        NULL,                
+        0
+    );                  
 
-    ESP_LOGI(TAG, "Controle ativo. Iniciando conexão Wi-Fi...");
-    wifi_init_sta(WIFI_SSID, WIFI_PASSWORD);
+    ESP_LOGI(TAG, "Controlo ativo. Iniciando infraestrutura de Rede (SoftAP)...");
+    
+    /* 3. Inicialização do Wi-Fi em modo Access Point */
+    if (WIFI_MGR_InitAP(APP_MAIN_WIFI_SSID, APP_MAIN_WIFI_PASSWORD) != ESP_OK) {
+        ESP_LOGE(TAG, "Falha ao inicializar o Access Point.");
+        return;
+    }
 
-    // 3. Tarefa de Comunicação (Core 1 - Rede)
+    /* 4. Tarefa de Transmissão de Telemetria via UDP (Core 1) */
     xTaskCreatePinnedToCore(
-                    communication_task,     
-                    "Tarefa de Comunicação",
-                    16384,                  
-                    NULL,                   
-                    5,                      
-                    NULL,                   
-                    1);                     
+        UDP_COMMS_TxTask,     
+        "Tarefa_Tx_UDP",
+        8192,                  
+        NULL,                   
+        5,                      
+        NULL,                   
+        1
+    );                     
 
-    ESP_LOGI(TAG, "Sistema inicializado. Tarefas separadas por Core.");
+    /* 5. Tarefa de Recepção de Comandos via UDP (Core 1) */
+    xTaskCreatePinnedToCore(
+        UDP_COMMS_RxTask,     
+        "Tarefa_Rx_UDP",
+        4096,                  
+        NULL,                   
+        6,                      
+        NULL,                   
+        1
+    );
+
+    ESP_LOGI(TAG, "Orquestracao inicializada com sucesso. Sistema a operar em modo AP.");
 }
