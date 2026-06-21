@@ -13,49 +13,39 @@ static const char *TAG = "IPC_MGR";
 
 #define TELEMETRY_QUEUE_SIZE 3000
 
-#define Ra1  4.476656
-#define La1  0.013590
-#define ke1  0.319541
-#define Ra2  2.793557
-#define La2  0.004421
-#define ke2  0.169322
-#define Jeq  0.000365
-#define Beq  0.000518
-#define RL   180.0
-
 static QueueHandle_t s_telemetry_queue = NULL;
-static SemaphoreHandle_t s_setpoint_mutex = NULL;
-static float s_current_setpoint = 0.0f;
+static SemaphoreHandle_t s_reference_mutex = NULL;
+static float s_generic_reference = 0.0f; /* Variável Agnóstica */
 
 bool IPC_MGR_Init(void) {
     s_telemetry_queue = xQueueCreate(TELEMETRY_QUEUE_SIZE, sizeof(control_data_t));
-    s_setpoint_mutex = xSemaphoreCreateMutex();
+    s_reference_mutex = xSemaphoreCreateMutex();
 
-    if (s_telemetry_queue == NULL || s_setpoint_mutex == NULL) {
+    if (s_telemetry_queue == NULL || s_reference_mutex == NULL) {
         ESP_LOGE(TAG, "Falha critica na alocacao de recursos do IPC.");
         return false;
     }
     return true;
 }
 
-void IPC_MGR_SetSetpoint(float setpoint) {
-    if (s_setpoint_mutex != NULL) {
-        if (xSemaphoreTake(s_setpoint_mutex, portMAX_DELAY) == pdTRUE) {
-            s_current_setpoint = setpoint;
-            xSemaphoreGive(s_setpoint_mutex);
+void IPC_MGR_SetReference(float ref) {
+    if (s_reference_mutex != NULL) {
+        if (xSemaphoreTake(s_reference_mutex, portMAX_DELAY) == pdTRUE) {
+            s_generic_reference = ref;
+            xSemaphoreGive(s_reference_mutex);
         }
     }
 }
 
-float IPC_MGR_GetSetpoint(void) {
-    float temp_setpoint = 0.0f;
-    if (s_setpoint_mutex != NULL) {
-        if (xSemaphoreTake(s_setpoint_mutex, pdMS_TO_TICKS(10)) == pdTRUE) {
-            temp_setpoint = s_current_setpoint;
-            xSemaphoreGive(s_setpoint_mutex);
+float IPC_MGR_GetReference(void) {
+    float temp_ref = 0.0f;
+    if (s_reference_mutex != NULL) {
+        if (xSemaphoreTake(s_reference_mutex, pdMS_TO_TICKS(10)) == pdTRUE) {
+            temp_ref = s_generic_reference;
+            xSemaphoreGive(s_reference_mutex);
         }
     }
-    return temp_setpoint;
+    return temp_ref;
 }
 
 bool IPC_MGR_EnqueueTelemetry(const control_data_t *data) {
@@ -66,11 +56,4 @@ bool IPC_MGR_EnqueueTelemetry(const control_data_t *data) {
 bool IPC_MGR_DequeueTelemetry(control_data_t *data, uint32_t timeout_ms) {
     if (s_telemetry_queue == NULL) return false;
     return (xQueueReceive(s_telemetry_queue, data, pdMS_TO_TICKS(timeout_ms)) == pdTRUE);
-}
-
-float IPC_MGR_DesiredReference(float current_setpoint) {
-    float i2_desired_reference_x3 = current_setpoint/RL;
-    float w_desired_reference_x1 = ((Ra2+RL) / ke2) * i2_desired_reference_x3;
-    float i1_desired_reference_x2 = ((Beq * w_desired_reference_x1) + (ke2 * i2_desired_reference_x3)) / ke1;
-    return w_desired_reference_x1, i1_desired_reference_x2, i2_desired_reference_x3;
 }

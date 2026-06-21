@@ -18,25 +18,22 @@ static const char *TAG_RX = "UDP_RX";
 #define UDP_COMMS_PORT_RX       5001
 #define UDP_COMMS_BROADCAST_IP  "192.168.4.255"
 
-/* Loteamento Estrito: 5 Amostras x 36 bytes = 180 bytes por pacote UDP */
 #define UDP_COMMS_BATCH_SIZE    5 
 
 /**
- * @brief Processa internamente o comando binário recebido.
- * @param[in] new_setpoint Referência de tensão (float) recebida via rede.
+ * @brief Injeta o valor agnóstico recebido da interface na memória partilhada.
  */
-static void UDP_COMMS_ProcessCommand(float new_setpoint)
+static void UDP_COMMS_ProcessCommand(float incoming_reference)
 {
-    IPC_MGR_SetSetpoint(new_setpoint);
+    IPC_MGR_SetReference(incoming_reference);
 }
 
 void UDP_COMMS_TxTask(void *pvParameter)
 {
-    ESP_LOGI(TAG_TX, "Tarefa de Transmissao Binaria iniciada (Zero-Copy Batching).");
+    ESP_LOGI(TAG_TX, "Tarefa de Transmissao Binaria iniciada.");
 
     int sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_IP);
     if (sock < 0) {
-        ESP_LOGE(TAG_TX, "Falha critica na criacao do socket de TX.");
         vTaskDelete(NULL);
     }
 
@@ -74,11 +71,10 @@ void UDP_COMMS_TxTask(void *pvParameter)
 
 void UDP_COMMS_RxTask(void *pvParameter)
 {
-    ESP_LOGI(TAG_RX, "Tarefa de Recepcao iniciada (Binary Listening).");
+    ESP_LOGI(TAG_RX, "Tarefa de Recepcao iniciada (Agnostic Listening).");
 
     int sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_IP);
     if (sock < 0) {
-        ESP_LOGE(TAG_RX, "Falha critica na criacao do socket de RX.");
         vTaskDelete(NULL);
     }
 
@@ -88,21 +84,20 @@ void UDP_COMMS_RxTask(void *pvParameter)
     rx_addr.sin_port = htons(UDP_COMMS_PORT_RX);
 
     if (bind(sock, (struct sockaddr *)&rx_addr, sizeof(rx_addr)) < 0) {
-        ESP_LOGE(TAG_RX, "Falha no bind da porta de recepcao.");
         close(sock);
         vTaskDelete(NULL);
     }
 
-    float incoming_setpoint_buffer;
+    float incoming_agnostic_buffer;
 
     while (1) {
         struct sockaddr_storage source_addr;
         socklen_t socklen = sizeof(source_addr);
         
-        int len = recvfrom(sock, &incoming_setpoint_buffer, sizeof(float), 0, (struct sockaddr *)&source_addr, &socklen);
+        int len = recvfrom(sock, &incoming_agnostic_buffer, sizeof(float), 0, (struct sockaddr *)&source_addr, &socklen);
         
         if (len == sizeof(float)) {
-            UDP_COMMS_ProcessCommand(incoming_setpoint_buffer);
+            UDP_COMMS_ProcessCommand(incoming_agnostic_buffer);
         }
     }
 

@@ -8,10 +8,10 @@
 
 #define HAL_LEDC_TIMER          LEDC_TIMER_0
 #define HAL_LEDC_MODE           LEDC_LOW_SPEED_MODE
-#define HAL_LEDC_OUTPUT_IO      (21)
+#define HAL_LEDC_OUTPUT_IO      21
 #define HAL_LEDC_CHANNEL        LEDC_CHANNEL_0
 #define HAL_LEDC_DUTY_RES       LEDC_TIMER_13_BIT
-#define HAL_LEDC_FREQUENCY      (5000)
+#define HAL_LEDC_FREQUENCY      5000
 #define HAL_LEDC_MAX_DUTY_VAL   8191.0f
 
 bool HAL_PWM_Init(void) {

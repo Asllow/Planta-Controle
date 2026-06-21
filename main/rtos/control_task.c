@@ -1,8 +1,9 @@
 /**
  * @file control_task.c
  * @brief Tarefa central de tempo real do sistema de controlo.
- * * Orquestra as leituras da HAL, o processamento matemático e 
- * a escrita nos atuadores, ditando a frequência de discretização.
+ * * NOTA ARQUITETURAL: A tarefa lê um valor agnóstico genérico (float).
+ * O limite físico e semântico é aplicado exclusivamente dentro das funções 
+ * matemáticas do control_algorithms.c, garantindo segurança funcional (Failsafe).
  */
 
 #include "control_task.h"
@@ -20,7 +21,6 @@ static const char *TAG = "CTRL_TASK";
 
 #define CONTROL_LOOP_FREQUENCY_HZ 1000
 
-
 void control_loop_task(void *pvParameters) {
     ESP_LOGI(TAG, "Inicializando periféricos de Controlo...");
     
@@ -32,31 +32,24 @@ void control_loop_task(void *pvParameters) {
     TickType_t last_wake_time = xTaskGetTickCount();
     const TickType_t sampling_time_ticks = pdMS_TO_TICKS(1000 / CONTROL_LOOP_FREQUENCY_HZ);
 
+    ESP_LOGI(TAG, "Iniciando Malha de Tempo Real a 1000Hz (Agnostic Mode).");
+
     while (1) {
-        float current_setpoint = IPC_MGR_GetSetpoint();
-
-        float X1, float X2, float X3 = IPC_MGR_DesiredReference(current_setpoint);
-
-        
+        float generic_reference = IPC_MGR_GetReference();
         
         uint32_t sensor_voltage_mv = 0;
         int sensor_raw = 0;
         HAL_ADC_ReadVoltage(&sensor_voltage_mv, &sensor_raw);
 
-        float control_effort = MATH_CTRL_ComputeOpenLoop(current_setpoint);
+        float control_effort_duty = MATH_CTRL_ComputeOpenLoop(generic_reference);
 
-        HAL_PWM_SetDutyCycle(control_effort);
+        HAL_PWM_SetDutyCycle(control_effort_duty);
 
         control_data_t telemetry;
         telemetry.timestamp_amostra_ms = (uint32_t)(esp_timer_get_time() / 1000);
-        telemetry.sinal_controle       = current_setpoint; 
+        telemetry.sinal_controle       = control_effort_duty; 
         telemetry.tensao_mv            = (float)sensor_voltage_mv;
         telemetry.valor_adc            = (float)sensor_raw;
-        telemetry.tensao_estimada_mv   = 0.0f; 
-        telemetry.erro_obs_mv          = 0.0f; 
-        telemetry.estado_1             = 0.0f; 
-        telemetry.estado_2             = 0.0f; 
-        telemetry.estado_3             = 0.0f; 
 
         IPC_MGR_EnqueueTelemetry(&telemetry);
 

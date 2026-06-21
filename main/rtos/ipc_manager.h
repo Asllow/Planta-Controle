@@ -35,16 +35,16 @@ typedef struct __attribute__((packed)) {
 bool IPC_MGR_Init(void);
 
 /**
- * @brief Define de forma segura o setpoint atual.
- * @param[in] setpoint Valor do setpoint a ser definido.
+ * @brief Define de forma segura a referência genérica recebida da rede.
+ * @param[in] ref Valor de referência agnóstico (float).
  */
-void IPC_MGR_SetSetpoint(float setpoint);
+void IPC_MGR_SetReference(float ref);
 
 /**
- * @brief Obtém de forma segura o setpoint atual.
- * @return Valor do setpoint atual.
+ * @brief Obtém de forma segura a referência atual para a malha.
+ * @return Valor da referência agnóstica.
  */
-float IPC_MGR_GetSetpoint(void);
+float IPC_MGR_GetReference(void);
 
 /**
  * @brief Insere um novo pacote de dados na fila de telemetria.
