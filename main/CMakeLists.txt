@@ -5,4 +5,4 @@ idf_component_register(SRCS "main.c"
                         "control_task.c" 
                         "http_client_task.c"
                         INCLUDE_DIRS "."
-                        REQUIRES esp_wifi driver esp_event esp_websocket_client cjson nvs_flash esp_netif esp_adc)
+                        REQUIRES esp_wifi driver esp_event lwip esp_websocket_client cjson nvs_flash esp_netif esp_adc esp_driver_ledc)

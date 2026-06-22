@@ -15,13 +15,16 @@
  * * Esta estrutura contém um pacote completo de dados coletados em um único ciclo de controle.
  */
 typedef struct {
-    int64_t timestamp_amostra_ms; // Timestamp em milissegundos de quando a amostra foi tirada (desde o boot).
-    int valor_adc_raw;            // O valor bruto lido do ADC (ex: 0-4095).
-    uint32_t tensao_mv;           // A tensão calculada em milivolts, após calibração.
-    float sinal_controle;         // O sinal de controle calculado e aplicado ao motor (%).
+    int64_t timestamp_amostra_ms;
+    int valor_adc_raw;
+    uint32_t tensao_mv;
+    float sinal_controle;
 #ifdef ENABLE_OBSERVER_DEBUG
     float tensao_estimada_mv;
     float erro_obs_mv;
+    float estado_1;
+    float estado_2;
+    float estado_3;
 #endif
 } control_data_t;
 
