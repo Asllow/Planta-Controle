@@ -1,5 +1,3 @@
-// main/shared_resources.h
-
 #ifndef SHARED_RESOURCES_H
 #define SHARED_RESOURCES_H
 
@@ -10,13 +8,11 @@
 
 #define ENABLE_OBSERVER_DEBUG
 
-/**
- * @brief Estrutura para passar os dados de controle do Core 0 (controle) para o Core 1 (comunicação).
- * * Esta estrutura contém um pacote completo de dados coletados em um único ciclo de controle.
- */
-typedef struct {
+// O atributo 'packed' garante que não haverá preenchimento (padding) de memória vazio,
+// o que é essencial para enviar a struct diretamente via rede como array de bytes.
+typedef struct __attribute__((packed)) {
     int64_t timestamp_amostra_ms;
-    int valor_adc_raw;
+    int32_t valor_adc_raw;      
     uint32_t tensao_mv;
     float sinal_controle;
 #ifdef ENABLE_OBSERVER_DEBUG
@@ -28,60 +24,9 @@ typedef struct {
 #endif
 } control_data_t;
 
-
-// --- Declarações de Variáveis e Handles Globais ---
-// Usamos 'extern' para dizer ao compilador que estas variáveis existem,
-// mas são definidas em outro arquivo (no nosso caso, em main.c).
-
-/**
- * @brief Fila para enviar pacotes de dados do Core 0 para o Core 1.
- * É o principal meio de comunicação entre as tarefas.
- */
 extern QueueHandle_t data_queue;
-
-/**
- * @brief Mutex para proteger o acesso à variável de setpoint global.
- * Garante que a leitura/escrita do setpoint seja atômica e segura entre os cores.
- */
 extern SemaphoreHandle_t g_setpoint_mutex;
-
-/**
- * @brief Armazena o valor de setpoint atual recebido do servidor.
- * É 'volatile' para indicar ao compilador que seu valor pode mudar a qualquer momento.
- */
 extern volatile float g_current_setpoint;
-
-/**
- * @brief Armazena quando foi a última comunicação válida.
- * 
- */
 extern volatile int64_t g_last_valid_communication_ms;
-
-/**
- * @brief Constante de Calibração.
- * 
- */ 
-extern volatile float g_sensor_max_voltage_mv;
-
-// --- ESTATÍSTICAS DE DEBUG ---
-// Usamos volatile para garantir que as tarefas leiam o valor real da RAM
-
-/**
- * @brief Estatística de total de amostras geradas.
- * 
- */ 
-extern volatile uint32_t g_debug_samples_count;
-
-/**
- * @brief Estatística de total de pacotes HTTP enviados com sucesso.
- * 
- */ 
-extern volatile uint32_t g_debug_batches_sent;
-
-/**
- * @brief Estatística de total de erros de envio.
- * 
- */ 
-extern volatile uint32_t g_debug_http_errors;
 
 #endif // SHARED_RESOURCES_H
